@@ -104,12 +104,12 @@ def get_tts_datasets(path: Path, batch_size, r):
         dataset = pickle.load(f)
 
     dataset_ids = []
-    mel_lengths = []
+    wav_lengths = []
 
     for (item_id, len) in dataset:
-        if len <= hp.tts_max_mel_len:
+        if len <= hp.tts_max_wav_len:
             dataset_ids += [item_id]
-            mel_lengths += [len]
+            wav_lengths += [len]
 
     with open(path/'text_dict.pkl', 'rb') as f:
         text_dict = pickle.load(f)
@@ -119,16 +119,16 @@ def get_tts_datasets(path: Path, batch_size, r):
     sampler = None
 
     if hp.tts_bin_lengths:
-        sampler = BinnedLengthSampler(mel_lengths, batch_size, batch_size * 3)
+        sampler = BinnedLengthSampler(wav_lengths, batch_size, batch_size * 3)
 
     train_set = DataLoader(train_dataset,
                            collate_fn=lambda batch: collate_tts(batch, r),
                            batch_size=batch_size,
                            sampler=sampler,
-                           num_workers=1,
+                           num_workers=0,
                            pin_memory=True)
 
-    longest = mel_lengths.index(max(mel_lengths))
+    longest = wav_lengths.index(max(wav_lengths))
 
     # Used to evaluate attention during training process
     attn_example = dataset_ids[longest]
@@ -147,9 +147,9 @@ class TTSDataset(Dataset):
     def __getitem__(self, index):
         item_id = self.metadata[index]
         x = text_to_sequence(self.text_dict[item_id], hp.tts_cleaner_names)
-        mel = np.load(self.path/'mel'/f'{item_id}.npy')
-        mel_len = mel.shape[-1]
-        return x, mel, item_id, mel_len
+        wav = np.load(self.path/'norm_wav'/f'{item_id}.npy')
+        wav_len = wav.shape[-1]
+        return x, wav, item_id, wav_len
 
     def __len__(self):
         return len(self.metadata)
@@ -171,23 +171,29 @@ def collate_tts(batch, r):
     chars = [pad1d(x[0], max_x_len) for x in batch]
     chars = np.stack(chars)
 
-    spec_lens = [x[1].shape[-1] for x in batch]
+    wav_split_r = [torch.from_numpy(x[1]).unfold(0, hp.tts_K(r), hp.tts_K(r)).T for x in batch]
+
+    spec_lens = [x.shape[-1] for x in wav_split_r]
     max_spec_len = max(spec_lens) + 1
     if max_spec_len % r != 0:
         max_spec_len += r - max_spec_len % r
 
-    mel = [pad2d(x[1], max_spec_len) for x in batch]
-    mel = np.stack(mel)
+    wav = [pad2d(x, max_spec_len) for x in wav_split_r]
+    wav = np.stack(wav)
 
     ids = [x[2] for x in batch]
-    mel_lens = [x[3] for x in batch]
+    wav_lens = [x[3] for x in batch]
 
     chars = torch.tensor(chars).long()
-    mel = torch.tensor(mel)
+    wav = torch.tensor(wav)
+
+    stop_targets = torch.ones(len(batch), max_spec_len)
+    for j in range(len(ids)):
+        stop_targets[j, :wav_split_r[j].size(1)-1] = 0
 
     # scale spectrograms to -4 <--> 4
-    mel = (mel * 8.) - 4.
-    return chars, mel, ids, mel_lens
+    # mel = (mel * 8.) - 4.
+    return chars, wav, ids, wav_lens, stop_targets
 
 
 class BinnedLengthSampler(Sampler):

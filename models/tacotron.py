@@ -1,4 +1,5 @@
 import os
+from turtle import forward
 import numpy as np
 import torch
 import torch.nn as nn
@@ -6,6 +7,11 @@ import torch.nn.functional as F
 from pathlib import Path
 from typing import Union
 
+from flow.blow import Model as Blow
+from utils import hparams as hp
+import matplotlib
+matplotlib.use('MacOSX')
+import matplotlib.pyplot as plt
 
 class HighwayNetwork(nn.Module):
     def __init__(self, size):
@@ -141,10 +147,10 @@ class PreNet(nn.Module):
 
     def forward(self, x):
         x = self.fc1(x)
-        x = F.relu(x)
+        x = torch.tanh(x)
         x = F.dropout(x, self.p, training=self.training)
         x = self.fc2(x)
-        x = F.relu(x)
+        x = torch.tanh(x)
         x = F.dropout(x, self.p, training=self.training)
         return x
 
@@ -209,17 +215,29 @@ class Decoder(nn.Module):
     # Class variable because its value doesn't change between classes
     # yet ought to be scoped by class because its a property of a Decoder
     max_r = 20
-    def __init__(self, n_mels, decoder_dims, lstm_dims):
+    def __init__(self, decoder_R, decoder_K, decoder_dims, lstm_dims):
         super().__init__()
         self.register_buffer('r', torch.tensor(1, dtype=torch.int))
-        self.n_mels = n_mels
-        self.prenet = PreNet(n_mels)
+        self.decoder_K = decoder_K
+        self.decoder_J = hp.tts_J(decoder_R)
+        self.prenet = PreNet(decoder_K, dropout=0)
         self.attn_net = LSA(decoder_dims)
         self.attn_rnn = nn.GRUCell(decoder_dims + decoder_dims // 2, decoder_dims)
         self.rnn_input = nn.Linear(2 * decoder_dims, lstm_dims)
         self.res_rnn1 = nn.LSTMCell(lstm_dims, lstm_dims)
         self.res_rnn2 = nn.LSTMCell(lstm_dims, lstm_dims)
-        self.mel_proj = nn.Linear(lstm_dims, n_mels * self.max_r, bias=False)
+
+        res_lstm_dims = lstm_dims + decoder_K
+        self.res_lstm = nn.ModuleList([
+            nn.LSTMCell(res_lstm_dims, res_lstm_dims),
+            nn.LSTMCell(res_lstm_dims, res_lstm_dims),
+            nn.LSTMCell(res_lstm_dims, res_lstm_dims),
+            nn.LSTMCell(res_lstm_dims, res_lstm_dims)
+        ])
+        self.stop_proj = nn.Linear(res_lstm_dims, 1)
+
+        # Generative Flows
+        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, ntargets=None, _=None)
 
     def zoneout(self, prev, current, p=0.1):
         device = next(self.parameters()).device  # Use same device as parameters
@@ -233,8 +251,8 @@ class Decoder(nn.Module):
         batch_size = encoder_seq.size(0)
 
         # Unpack the hidden and cell states
-        attn_hidden, rnn1_hidden, rnn2_hidden = hidden_states
-        rnn1_cell, rnn2_cell = cell_states
+        attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden = hidden_states
+        rnn1_cell, rnn2_cell, res_lstm_cell = cell_states
 
         # PreNet for the Attention RNN
         prenet_out = self.prenet(prenet_in)
@@ -270,30 +288,70 @@ class Decoder(nn.Module):
             rnn2_hidden = rnn2_hidden_next
         x = x + rnn2_hidden
 
-        # Project Mels
-        mels = self.mel_proj(x)
-        mels = mels.view(batch_size, self.n_mels, self.max_r)[:, :, :self.r]
-        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden)
-        cell_states = (rnn1_cell, rnn2_cell)
+        # concat output from above rnn with ground truth
+        res_lstm_x = torch.cat([prenet_in, x], dim=1)
 
-        return mels, scores, hidden_states, cell_states, context_vec
+        # Residual lstm x4
+        for i, l in enumerate(self.res_lstm):
+            res_lstm_hidden_next, res_lstm_cell[i] = l(res_lstm_x, (res_lstm_hidden[i], res_lstm_cell[i]))
+            if self.training:
+                res_lstm_hidden[i] = self.zoneout(res_lstm_hidden[i], res_lstm_hidden_next)
+            else:
+                res_lstm_hidden[i] = res_lstm_hidden_next
+            res_lstm_x = res_lstm_x + res_lstm_hidden[i]
+
+        cond_features = res_lstm_x
+
+
+        # forward ground truth to flows when training
+        if self.training:
+            flows_input = prenet_in.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
+            # z_last, logp, logdet, z_lists = self.flows(flows_input)
+            logp = torch.rand(128)
+            logdet = torch.rand(128)
+
+            # abc= self.flows.reverse(z_lists, reconstruct=True)
+            # plt.figure(1)
+            # plt.plot(prenet_in[0].detach().numpy())
+            # plt.figure(2)
+            # plt.plot(z[0].detach().numpy())
+            # plt.figure(3)
+            # plt.plot(abc[0].detach().numpy())
+            # plt.show()
+            # print(h.shape, )
+            # [print(f.shape) for f in z_outs]
+        else:
+            pass
+
+        # Project Mels
+        # mels = self.mel_proj(x)
+        # mels = mels.view(batch_size, self.n_mels, self.max_r)[:, :, :self.r]
+        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden)
+        cell_states = (rnn1_cell, rnn2_cell, res_lstm_cell)
+
+        # Stop token prediction
+        s = self.stop_proj(cond_features)
+        stop_tokens = torch.sigmoid(s)
+
+        return logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec]
 
 
 class Tacotron(nn.Module):
-    def __init__(self, embed_dims, num_chars, encoder_dims, decoder_dims, n_mels, fft_bins, postnet_dims,
+    def __init__(self, embed_dims, num_chars, encoder_dims, decoder_dims, decoder_R, fft_bins, postnet_dims,
                  encoder_K, lstm_dims, postnet_K, num_highways, dropout, stop_threshold):
         super().__init__()
-        self.n_mels = n_mels
+        self.decoder_K = hp.tts_K(decoder_R)
         self.lstm_dims = lstm_dims
         self.decoder_dims = decoder_dims
         self.encoder = Encoder(embed_dims, num_chars, encoder_dims,
                                encoder_K, num_highways, dropout)
         self.encoder_proj = nn.Linear(decoder_dims, decoder_dims, bias=False)
-        self.decoder = Decoder(n_mels, decoder_dims, lstm_dims)
-        self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
-        self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
+        self.decoder = Decoder(decoder_R, self.decoder_K, decoder_dims, lstm_dims)
+        self.r = decoder_R
+        # self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
+        # self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
 
-        self.init_model()
+        # self.init_model()
         self.num_params()
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
@@ -307,7 +365,7 @@ class Tacotron(nn.Module):
     def r(self, value):
         self.decoder.r = self.decoder.r.new_tensor(value, requires_grad=False)
 
-    def forward(self, x, m, generate_gta=False):
+    def forward(self, x, wav, generate_gta=False):
         device = next(self.parameters()).device  # use same device as parameters
 
         self.step += 1
@@ -317,21 +375,23 @@ class Tacotron(nn.Module):
         else:
             self.train()
 
-        batch_size, _, steps  = m.size()
+        batch_size, _, steps  = wav.size()
 
         # Initialise all hidden states and pack into tuple
         attn_hidden = torch.zeros(batch_size, self.decoder_dims, device=device)
         rnn1_hidden = torch.zeros(batch_size, self.lstm_dims, device=device)
         rnn2_hidden = torch.zeros(batch_size, self.lstm_dims, device=device)
-        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden)
+        res_lstm_hidden = torch.zeros(4, batch_size, self.lstm_dims + self.decoder_K, device=device)
+        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden)
 
         # Initialise all lstm cell states and pack into tuple
         rnn1_cell = torch.zeros(batch_size, self.lstm_dims, device=device)
         rnn2_cell = torch.zeros(batch_size, self.lstm_dims, device=device)
-        cell_states = (rnn1_cell, rnn2_cell)
+        res_lstm_cell = torch.zeros(4, batch_size, self.lstm_dims + self.decoder_K, device=device)
+        cell_states = (rnn1_cell, rnn2_cell, res_lstm_cell)
 
         # <GO> Frame for start of decoder loop
-        go_frame = torch.zeros(batch_size, self.n_mels, device=device)
+        go_frame = torch.zeros(batch_size, self.decoder_K, device=device)
 
         # Need an initial context vector
         context_vec = torch.zeros(batch_size, self.decoder_dims, device=device)
@@ -342,30 +402,43 @@ class Tacotron(nn.Module):
         encoder_seq_proj = self.encoder_proj(encoder_seq)
 
         # Need a couple of lists for outputs
-        mel_outputs, attn_scores = [], []
+        attn_scores, stop_outputs = [], []
+        logplists, logdetlosts = [], []
+        # import time
 
         # Run the decoder loop
         for t in range(0, steps, self.r):
-            prenet_in = m[:, :, t - 1] if t > 0 else go_frame
-            mel_frames, scores, hidden_states, cell_states, context_vec = \
+            prenet_in = wav[:, :, t - 1] if t > 0 else go_frame
+            # start = time.time()
+            logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec] = \
                 self.decoder(encoder_seq, encoder_seq_proj, prenet_in,
                              hidden_states, cell_states, context_vec, t)
-            mel_outputs.append(mel_frames)
+            logplists.append(logp)
+            logdetlosts.append(logdet)
+            # end = time.time()
+            # print(end - start)
+            # mel_outputs.append(mel_frames)
+            stop_outputs.extend([stop_tokens] * self.r)
             attn_scores.append(scores)
 
         # Concat the mel outputs into sequence
-        mel_outputs = torch.cat(mel_outputs, dim=2)
+        # mel_outputs = torch.cat(mel_outputs, dim=2)
+        logplists = torch.stack(logplists, 1)
+        logdetlosts = torch.stack(logdetlosts, 1)
 
-        # Post-Process for Linear Spectrograms
-        postnet_out = self.postnet(mel_outputs)
-        linear = self.post_proj(postnet_out)
-        linear = linear.transpose(1, 2)
+        stop_outputs = torch.cat(stop_outputs, 1)
+
+        # # Post-Process for Linear Spectrograms
+        # postnet_out = self.postnet(mel_outputs)
+        # linear = self.post_proj(postnet_out)
+        # linear = linear.transpose(1, 2)
+        # linear = []
 
         # For easy visualisation
         attn_scores = torch.cat(attn_scores, 1)
         # attn_scores = attn_scores.cpu().data.numpy()
 
-        return mel_outputs, linear, attn_scores
+        return logplists, logdetlosts, attn_scores, stop_outputs
 
     def generate(self, x, steps=2000):
         self.eval()
@@ -378,15 +451,17 @@ class Tacotron(nn.Module):
         attn_hidden = torch.zeros(batch_size, self.decoder_dims, device=device)
         rnn1_hidden = torch.zeros(batch_size, self.lstm_dims, device=device)
         rnn2_hidden = torch.zeros(batch_size, self.lstm_dims, device=device)
-        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden)
+        res_lstm_hidden = torch.zeros(4, batch_size, self.lstm_dims + self.decoder_K, device=device)
+        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden)
 
         # Need to initialise all lstm cell states and pack into tuple for tidyness
         rnn1_cell = torch.zeros(batch_size, self.lstm_dims, device=device)
         rnn2_cell = torch.zeros(batch_size, self.lstm_dims, device=device)
-        cell_states = (rnn1_cell, rnn2_cell)
+        res_lstm_cell = torch.zeros(4, batch_size, self.lstm_dims + self.decoder_K, device=device)
+        cell_states = (rnn1_cell, rnn2_cell, res_lstm_cell)
 
         # Need a <GO> Frame for start of decoder loop
-        go_frame = torch.zeros(batch_size, self.n_mels, device=device)
+        go_frame = torch.zeros(batch_size, self.decoder_K, device=device)
 
         # Need an initial context vector
         context_vec = torch.zeros(batch_size, self.decoder_dims, device=device)
@@ -413,12 +488,13 @@ class Tacotron(nn.Module):
         # Concat the mel outputs into sequence
         mel_outputs = torch.cat(mel_outputs, dim=2)
 
-        # Post-Process for Linear Spectrograms
-        postnet_out = self.postnet(mel_outputs)
-        linear = self.post_proj(postnet_out)
+        # # Post-Process for Linear Spectrograms
+        # postnet_out = self.postnet(mel_outputs)
+        # linear = self.post_proj(postnet_out)
 
 
-        linear = linear.transpose(1, 2)[0].cpu().data.numpy()
+        # linear = linear.transpose(1, 2)[0].cpu().data.numpy()
+        linear = []
         mel_outputs = mel_outputs[0].cpu().data.numpy()
 
         # For easy visualisation

@@ -72,24 +72,24 @@ if __name__ == "__main__":
         device = torch.device('cpu')
     print('Using device:', device)
 
-    if args.vocoder == 'wavernn':
-        print('\nInitialising WaveRNN Model...\n')
-        # Instantiate WaveRNN Model
-        voc_model = WaveRNN(rnn_dims=hp.voc_rnn_dims,
-                            fc_dims=hp.voc_fc_dims,
-                            bits=hp.bits,
-                            pad=hp.voc_pad,
-                            upsample_factors=hp.voc_upsample_factors,
-                            feat_dims=hp.num_mels,
-                            compute_dims=hp.voc_compute_dims,
-                            res_out_dims=hp.voc_res_out_dims,
-                            res_blocks=hp.voc_res_blocks,
-                            hop_length=hp.hop_length,
-                            sample_rate=hp.sample_rate,
-                            mode=hp.voc_mode).to(device)
+    # if args.vocoder == 'wavernn':
+    #     print('\nInitialising WaveRNN Model...\n')
+    #     # Instantiate WaveRNN Model
+    #     voc_model = WaveRNN(rnn_dims=hp.voc_rnn_dims,
+    #                         fc_dims=hp.voc_fc_dims,
+    #                         bits=hp.bits,
+    #                         pad=hp.voc_pad,
+    #                         upsample_factors=hp.voc_upsample_factors,
+    #                         feat_dims=hp.num_mels,
+    #                         compute_dims=hp.voc_compute_dims,
+    #                         res_out_dims=hp.voc_res_out_dims,
+    #                         res_blocks=hp.voc_res_blocks,
+    #                         hop_length=hp.hop_length,
+    #                         sample_rate=hp.sample_rate,
+    #                         mode=hp.voc_mode).to(device)
 
-        voc_load_path = args.voc_weights if args.voc_weights else paths.voc_latest_weights
-        voc_model.load(voc_load_path)
+    #     voc_load_path = args.voc_weights if args.voc_weights else paths.voc_latest_weights
+    #     voc_model.load(voc_load_path)
 
     print('\nInitialising Tacotron Model...\n')
 
@@ -98,18 +98,18 @@ if __name__ == "__main__":
                          num_chars=len(symbols),
                          encoder_dims=hp.tts_encoder_dims,
                          decoder_dims=hp.tts_decoder_dims,
-                         n_mels=hp.num_mels,
-                         fft_bins=hp.num_mels,
-                         postnet_dims=hp.tts_postnet_dims,
+                         decoder_R=hp.tts_R_inference,
+                         fft_bins=None,
+                         postnet_dims=None,
                          encoder_K=hp.tts_encoder_K,
                          lstm_dims=hp.tts_lstm_dims,
-                         postnet_K=hp.tts_postnet_K,
+                         postnet_K=None,
                          num_highways=hp.tts_num_highways,
                          dropout=hp.tts_dropout,
                          stop_threshold=hp.tts_stop_threshold).to(device)
 
     tts_load_path = tts_weights if tts_weights else paths.tts_latest_weights
-    tts_model.load(tts_load_path)
+    # tts_model.load(tts_load_path)
 
     if input_text:
         inputs = [text_to_sequence(input_text.strip(), hp.tts_cleaner_names)]
@@ -118,23 +118,23 @@ if __name__ == "__main__":
             inputs = [text_to_sequence(l.strip(), hp.tts_cleaner_names) for l in f]
 
     if args.vocoder == 'wavernn':
-        voc_k = voc_model.get_step() // 1000
+        # voc_k = voc_model.get_step() // 1000
         tts_k = tts_model.get_step() // 1000
 
         simple_table([('Tacotron', str(tts_k) + 'k'),
                     ('r', tts_model.r),
                     ('Vocoder Type', 'WaveRNN'),
-                    ('WaveRNN', str(voc_k) + 'k'),
+                    # ('WaveRNN', str(voc_k) + 'k'),
                     ('Generation Mode', 'Batched' if batched else 'Unbatched'),
                     ('Target Samples', target if batched else 'N/A'),
                     ('Overlap Samples', overlap if batched else 'N/A')])
 
-    elif args.vocoder == 'griffinlim':
-        tts_k = tts_model.get_step() // 1000
-        simple_table([('Tacotron', str(tts_k) + 'k'),
-                    ('r', tts_model.r),
-                    ('Vocoder Type', 'Griffin-Lim'),
-                    ('GL Iters', args.iters)])
+    # elif args.vocoder == 'griffinlim':
+    #     tts_k = tts_model.get_step() // 1000
+    #     simple_table([('Tacotron', str(tts_k) + 'k'),
+    #                 ('r', tts_model.r),
+    #                 ('Vocoder Type', 'Griffin-Lim'),
+    #                 ('GL Iters', args.iters)])
 
     for i, x in enumerate(inputs, 1):
 
@@ -158,11 +158,11 @@ if __name__ == "__main__":
 
         if save_attn: save_attention(attention, save_path)
 
-        if args.vocoder == 'wavernn':
-            m = torch.tensor(m).unsqueeze(0)
-            voc_model.generate(m, save_path, batched, hp.voc_target, hp.voc_overlap, hp.mu_law)
-        elif args.vocoder == 'griffinlim':
-            wav = reconstruct_waveform(m, n_iter=args.iters)
-            save_wav(wav, save_path)
+        # if args.vocoder == 'wavernn':
+        #     m = torch.tensor(m).unsqueeze(0)
+        #     voc_model.generate(m, save_path, batched, hp.voc_target, hp.voc_overlap, hp.mu_law)
+        # elif args.vocoder == 'griffinlim':
+        #     wav = reconstruct_waveform(m, n_iter=args.iters)
+        #     save_wav(wav, save_path)
 
     print('\n\nDone.\n')

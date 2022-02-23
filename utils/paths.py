@@ -9,6 +9,7 @@ class Paths:
 
         # Data Paths
         self.data = Path(data_path).expanduser().resolve()
+        self.norm_wav = self.data/'norm_wav'
         self.quant = self.data/'quant'
         self.mel = self.data/'mel'
         self.gta = self.data/'gta'
@@ -35,6 +36,7 @@ class Paths:
 
     def create_paths(self):
         os.makedirs(self.data, exist_ok=True)
+        os.makedirs(self.norm_wav, exist_ok=True)
         os.makedirs(self.quant, exist_ok=True)
         os.makedirs(self.mel, exist_ok=True)
         os.makedirs(self.gta, exist_ok=True)

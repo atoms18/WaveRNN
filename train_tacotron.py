@@ -51,24 +51,24 @@ def main():
                      num_chars=len(symbols),
                      encoder_dims=hp.tts_encoder_dims,
                      decoder_dims=hp.tts_decoder_dims,
-                     n_mels=hp.num_mels,
-                     fft_bins=hp.num_mels,
-                     postnet_dims=hp.tts_postnet_dims,
+                     decoder_R=hp.tts_R_train,
+                     fft_bins=None,
+                     postnet_dims=None,
                      encoder_K=hp.tts_encoder_K,
                      lstm_dims=hp.tts_lstm_dims,
-                     postnet_K=hp.tts_postnet_K,
+                     postnet_K=None,
                      num_highways=hp.tts_num_highways,
                      dropout=hp.tts_dropout,
                      stop_threshold=hp.tts_stop_threshold).to(device)
 
     optimizer = optim.Adam(model.parameters())
-    restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
+    # restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
             current_step = model.get_step()
 
-            r, lr, max_step, batch_size = session
+            lr, max_step, batch_size = session
 
             training_steps = max_step - current_step
 
@@ -87,14 +87,14 @@ def main():
                     # There is a following session, go to it
                     continue
 
-            model.r = r
+            model.r = hp.tts_R_train
 
-            simple_table([(f'Steps with r={r}', str(training_steps//1000) + 'k Steps'),
+            simple_table([(f'Steps with r={hp.tts_R_train}', str(training_steps//1000) + 'k Steps'),
                             ('Batch Size', batch_size),
                             ('Learning Rate', lr),
                             ('Outputs/Step (r)', model.r)])
 
-            train_set, attn_example = get_tts_datasets(paths.data, batch_size, r)
+            train_set, attn_example = get_tts_datasets(paths.data, batch_size, hp.tts_R_train)
             tts_train_loop(paths, model, optimizer, train_set, lr, training_steps, attn_example)
 
         print('Training Complete.')
@@ -115,6 +115,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
     for g in optimizer.param_groups: g['lr'] = lr
 
     total_iters = len(train_set)
+    print("Total iterations/epochs: " + str(total_iters))
     epochs = train_steps // total_iters + 1
 
     for e in range(1, epochs+1):
@@ -123,20 +124,23 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
         running_loss = 0
 
         # Perform 1 epoch
-        for i, (x, m, ids, _) in enumerate(train_set, 1):
+        for i, (x, wav, ids, _, stop_targets) in enumerate(train_set, 1):
 
-            x, m = x.to(device), m.to(device)
+            x, wav = x.to(device), wav.to(device)
 
             # Parallelize model onto GPUS using workaround due to python bug
             if device.type == 'cuda' and torch.cuda.device_count() > 1:
-                m1_hat, m2_hat, attention = data_parallel_workaround(model, x, m)
+                logplists, logdetlosts, attention, stop_outputs = data_parallel_workaround(model, x, wav)
             else:
-                m1_hat, m2_hat, attention = model(x, m)
+                logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
-            m1_loss = F.l1_loss(m1_hat, m)
-            m2_loss = F.l1_loss(m2_hat, m)
+            nll = -logplists - logdetlosts
+            nll /= model.decoder_K
+            nll = nll.mean()
 
-            loss = m1_loss + m2_loss
+            stop_loss = F.binary_cross_entropy(stop_outputs, stop_targets)
+
+            loss = nll + stop_loss
 
             optimizer.zero_grad()
             loss.backward()

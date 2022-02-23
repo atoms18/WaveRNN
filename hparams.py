@@ -17,10 +17,10 @@ ignore_tts = False
 # DSP --------------------------------------------------------------------------------------------------------------#
 
 # Settings for all models
-sample_rate = 22050
+sample_rate = 24000
 n_fft = 2048
 fft_bins = n_fft // 2 + 1
-num_mels = 80
+# num_mels = 80
 hop_length = 275                    # 12.5ms - in line with Tacotron 2 paper
 win_length = 1100                   # 50ms - same reason as above
 fmin = 40
@@ -67,10 +67,10 @@ voc_overlap = 550                   # number of samples for crossfading between 
 tts_embed_dims = 256                # embedding dimension for the graphemes/phoneme inputs
 tts_encoder_dims = 128
 tts_decoder_dims = 256
-tts_postnet_dims = 128
+# tts_postnet_dims = 128
 tts_encoder_K = 16
-tts_lstm_dims = 512
-tts_postnet_K = 8
+tts_lstm_dims = 256
+# tts_postnet_K = 8
 tts_num_highways = 4
 tts_dropout = 0.5
 tts_cleaner_names = ['english_cleaners']
@@ -81,13 +81,30 @@ tts_stop_threshold = -3.4           # Value below which audio generation ends.
 
 # Training
 
-tts_schedule = [(7,  1e-3,  10_000,  32),   # progressive training schedule
-                (5,  1e-4, 100_000,  32),   # (r, lr, step, batch_size)
-                (2,  1e-4, 180_000,  16),
-                (2,  1e-4, 350_000,  8)]
+tts_R_train = 3
+tts_R_inference = 1
+tts_L = 10
+tts_K = lambda R: 320 * R
+tts_J = lambda R: tts_K(R) // tts_L
 
-tts_max_mel_len = 1250              # if you have a couple of extremely long spectrograms you might want to use this
-tts_bin_lengths = True              # bins the spectrogram lengths before sampling in data loader - speeds up training
+tts_schedule = [(1e-3,  10_000,  128),   # progressive training schedule
+                (1e-4, 100_000,  128),   # (r, lr, step, batch_size)
+                (1e-4, 180_000,  128),
+                (1e-4, 350_000,  128),
+                (1e-5, 500_000,  128)]
+
+tts_N = 12  # number of flows
+tts_M = 5 # number of blocks
+
+# tts_schedule = [(7,  1e-3,  10_000,  32),   # progressive training schedule
+#                 (5,  1e-4, 100_000,  32),   # (r, lr, step, batch_size)
+#                 (2,  1e-4, 180_000,  16),
+#                 (2,  1e-4, 350_000,  8)]
+
+tts_max_wav_len = 1_440_000
+
+# tts_max_mel_len = 1250              # if you have a couple of extremely long spectrograms you might want to use this
+tts_bin_lengths = False              # bins the spectrogram lengths before sampling in data loader - speeds up training
 tts_clip_grad_norm = 1.0            # clips the gradient norm to prevent explosion - set to None if not needed
 tts_checkpoint_every = 2_000        # checkpoints the model every X steps
 # TODO: tts_phoneme_prob = 0.0              # [0 <-> 1] probability for feeding model phonemes vrs graphemes
