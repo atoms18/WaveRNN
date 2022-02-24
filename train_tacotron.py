@@ -170,10 +170,10 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
             speed = i / duration
 
             step = model.get_step()
-            k = step // 1000
+            # k = step // 1000
 
             if step % hp.tts_checkpoint_every == 0 or step == 1:
-                ckpt_name = f'taco_step{k}K'
+                ckpt_name = f'taco_step{step}'
                 save_checkpoint('tts', paths, model, optimizer,
                                 name=ckpt_name, is_silent=True)
                 logger.log_training(running_loss, grad_norm, lr, duration, step)
