@@ -118,6 +118,8 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
     print("Total Iterations per Epoch: " + str(total_iters))
     epochs = train_steps // total_iters + 1
 
+    scaler = torch.cuda.amp.GradScaler()
+
     for e in range(1, epochs+1):
 
         start = time.time()
@@ -131,28 +133,31 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
 
             print("Total Steps per Interation: " + str(wav.size(2)//model.r))
 
-            # Parallelize model onto GPUS using workaround due to python bug
-            if device.type == 'cuda' and torch.cuda.device_count() > 1:
-                logplists, logdetlosts, attention, stop_outputs = data_parallel_workaround(model, x, wav)
-            else:
-                logplists, logdetlosts, attention, stop_outputs = model(x, wav)
-
-            nll = -logplists - logdetlosts
-            nll = nll / model.decoder_K
-            nll = nll.mean()
-
-            stop_loss = F.binary_cross_entropy(stop_outputs, stop_targets)
-
-            loss = nll + stop_loss
-
             optimizer.zero_grad()
-            loss.backward()
+            with torch.cuda.amp.autocast():
+              # Parallelize model onto GPUS using workaround due to python bug
+              if device.type == 'cuda' and torch.cuda.device_count() > 1:
+                  logplists, logdetlosts, attention, stop_outputs = data_parallel_workaround(model, x, wav)
+              else:
+                  logplists, logdetlosts, attention, stop_outputs = model(x, wav)
+
+              nll = -logplists - logdetlosts
+              nll = nll / model.decoder_K
+              nll = nll.mean()
+
+              stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
+
+              loss = nll + stop_loss
+
+            scaler.scale(loss).backward()
             if hp.tts_clip_grad_norm is not None:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), hp.tts_clip_grad_norm)
                 if np.isnan(grad_norm.cpu()):
                     print('grad_norm was NaN!')
 
-            optimizer.step()
+            scaler.step(optimizer)
+
+            scaler.update()
 
             running_loss += loss.item()
             avg_loss = running_loss / i
