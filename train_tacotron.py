@@ -115,7 +115,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
     for g in optimizer.param_groups: g['lr'] = lr
 
     total_iters = len(train_set)
-    print("Total iterations/epochs: " + str(total_iters))
+    print("Total Iterations per Epoch: " + str(total_iters))
     epochs = train_steps // total_iters + 1
 
     for e in range(1, epochs+1):
@@ -128,6 +128,8 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
 
             x, wav = x.to(device), wav.to(device)
 
+            print("Total Steps per Interation: " + str(wav.size(2)//model.r))
+
             # Parallelize model onto GPUS using workaround due to python bug
             if device.type == 'cuda' and torch.cuda.device_count() > 1:
                 logplists, logdetlosts, attention, stop_outputs = data_parallel_workaround(model, x, wav)
@@ -135,7 +137,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
                 logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
             nll = -logplists - logdetlosts
-            nll /= model.decoder_K
+            nll = nll / model.decoder_K
             nll = nll.mean()
 
             stop_loss = F.binary_cross_entropy(stop_outputs, stop_targets)

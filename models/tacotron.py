@@ -291,7 +291,7 @@ class Decoder(nn.Module):
 
         # Residual lstm x4
         for i, l in enumerate(self.res_lstm):
-            res_lstm_hidden_next, res_lstm_cell[i] = l(res_lstm_x, (res_lstm_hidden[i], res_lstm_cell[i]))
+            res_lstm_hidden_next, res_lstm_cell[i] = l(res_lstm_x, (res_lstm_hidden[i].clone(), res_lstm_cell[i].clone()))
             if self.training:
                 res_lstm_hidden[i] = self.zoneout(res_lstm_hidden[i], res_lstm_hidden_next)
             else:
