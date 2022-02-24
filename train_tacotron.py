@@ -15,10 +15,16 @@ import time
 import numpy as np
 import sys
 from utils.checkpoints import save_checkpoint, restore_checkpoint
-
+from logger import Tacotron2Logger
 
 def np_now(x: torch.Tensor): return x.detach().cpu().numpy()
 
+def prepare_directories_and_logger(output_directory, log_directory):
+    if not os.path.isdir(output_directory):
+        os.makedirs(output_directory)
+        os.chmod(output_directory, 0o775)
+    logger = Tacotron2Logger(os.path.join(output_directory, log_directory))
+    return logger
 
 def main():
     # Parse Arguments
@@ -64,6 +70,10 @@ def main():
     optimizer = optim.Adam(model.parameters())
     restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
 
+    scaler = torch.cuda.amp.GradScaler()
+
+    logger = prepare_directories_and_logger(paths.tts_output, "logdir")
+
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
             current_step = model.get_step()
@@ -95,7 +105,7 @@ def main():
                             ('Outputs/Step (r)', model.r)])
 
             train_set, attn_example = get_tts_datasets(paths.data, batch_size, hp.tts_R_train)
-            tts_train_loop(paths, model, optimizer, train_set, lr, training_steps, attn_example)
+            tts_train_loop(paths, model, scaler, logger, optimizer, train_set, lr, training_steps, attn_example)
 
         print('Training Complete.')
         print('To continue training increase tts_total_steps in hparams.py or use --force_train\n')
@@ -109,15 +119,13 @@ def main():
     print('\n\nYou can now train WaveRNN on GTA features - use python train_wavernn.py --gta\n')
 
 
-def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, train_steps, attn_example):
+def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, train_set, lr, train_steps, attn_example):
     device = next(model.parameters()).device  # use same device as model parameters
 
     for g in optimizer.param_groups: g['lr'] = lr
 
     total_iters = len(train_set)
     epochs = train_steps // total_iters + 1
-
-    scaler = torch.cuda.amp.GradScaler()
 
     for e in range(1, epochs+1):
 
@@ -157,7 +165,8 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
             running_loss += loss.item()
             avg_loss = running_loss / i
 
-            speed = i / (time.time() - start)
+            duration = (time.time() - start)
+            speed = i / duration
 
             step = model.get_step()
             k = step // 1000
@@ -166,6 +175,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
                 ckpt_name = f'taco_step{k}K'
                 save_checkpoint('tts', paths, model, optimizer,
                                 name=ckpt_name, is_silent=True)
+                logger.log_training(running_loss, grad_norm, lr, duration, train_steps)
 
             if attn_example in ids:
                 idx = ids.index(attn_example)
