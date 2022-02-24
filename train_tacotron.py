@@ -137,6 +137,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
 
             x, wav = x.to(device), wav.to(device)
             stop_targets = stop_targets.to(device)
+            print(f"This Iteration\'s Total Steps: {wav.size(2)//model.r}\n")
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
@@ -183,7 +184,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 save_attention(np_now(attention[idx][:, :160]), paths.tts_attention/f'{step}')
                 # save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
 
-            print(f"This Iteration\'s Total Steps: {wav.size(2)//model.r}\n")
             msg = f'|Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {avg_loss:#.4} | {speed:#.2} iteration/s | Step: {step} | '
             stream(msg)
 
