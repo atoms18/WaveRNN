@@ -175,15 +175,16 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 ckpt_name = f'taco_step{k}K'
                 save_checkpoint('tts', paths, model, optimizer,
                                 name=ckpt_name, is_silent=True)
-                logger.log_training(running_loss, grad_norm, lr, duration, train_steps)
-                logger.log_validation(None, None, stop_targets, [stop_outputs, attention], train_steps)
+                logger.log_training(running_loss, grad_norm, lr, duration, step)
+                logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
 
             if attn_example in ids:
                 idx = ids.index(attn_example)
                 save_attention(np_now(attention[idx][:, :160]), paths.tts_attention/f'{step}')
                 # save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
 
-            msg = f'|Train {train_steps} | Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {avg_loss:#.4} | {speed:#.2} iteration/s | Step: {step} | This Iteration\'s Total Steps: {wav.size(2)//model.r} | '
+            print(f"This Iteration\'s Total Steps: {wav.size(2)//model.r}\n")
+            msg = f'|Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {avg_loss:#.4} | {speed:#.2} iteration/s | Step: {step} | '
             stream(msg)
 
         # Must save latest optimizer state to ensure that resuming training
