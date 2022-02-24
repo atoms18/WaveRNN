@@ -18,14 +18,14 @@ class Tacotron2Logger(SummaryWriter):
 
 
     def log_validation(self, reduced_loss, model, y, y_pred, iteration):
-        self.add_scalar("validation.loss", reduced_loss, iteration)
-        _, mel_outputs, gate_outputs, alignments = y_pred
-        mel_targets, gate_targets = y
+        # self.add_scalar("validation.loss", reduced_loss, iteration)
+        gate_outputs, alignments = y_pred
+        gate_targets = y
 
         # plot distribution of parameters
-        for tag, value in model.named_parameters():
-            tag = tag.replace('.', '/')
-            self.add_histogram(tag, value.data.cpu().numpy(), iteration)
+        # for tag, value in model.named_parameters():
+        #     tag = tag.replace('.', '/')
+        #     self.add_histogram(tag, value.data.cpu().numpy(), iteration)
 
         # plot alignment, mel target and predicted, gate target and predicted
         idx = random.randint(0, alignments.size(0) - 1)
