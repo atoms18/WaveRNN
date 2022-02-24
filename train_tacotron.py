@@ -38,7 +38,7 @@ def main():
     if not args.force_cpu and torch.cuda.is_available():
         device = torch.device('cuda')
         for session in hp.tts_schedule:
-            _, _, _, batch_size = session
+            _, _, batch_size = session
             if batch_size % torch.cuda.device_count() != 0:
                 raise ValueError('`batch_size` must be evenly divisible by n_gpus!')
     else:
@@ -127,6 +127,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
         for i, (x, wav, ids, _, stop_targets) in enumerate(train_set, 1):
 
             x, wav = x.to(device), wav.to(device)
+            stop_targets = stop_targets.to(device)
 
             print("Total Steps per Interation: " + str(wav.size(2)//model.r))
 
@@ -148,7 +149,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
             loss.backward()
             if hp.tts_clip_grad_norm is not None:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), hp.tts_clip_grad_norm)
-                if np.isnan(grad_norm):
+                if np.isnan(grad_norm.cpu()):
                     print('grad_norm was NaN!')
 
             optimizer.step()

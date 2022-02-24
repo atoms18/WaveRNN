@@ -402,19 +402,19 @@ class Tacotron(nn.Module):
         # Need a couple of lists for outputs
         attn_scores, stop_outputs = [], []
         logplists, logdetlosts = [], []
-        import time
+        # import time
 
         # Run the decoder loop
         for t in range(0, steps, self.r):
             prenet_in = wav[:, :, t - 1] if t > 0 else go_frame
-            start = time.time()
+            # start = time.time()
             logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec] = \
                 self.decoder(encoder_seq, encoder_seq_proj, prenet_in,
                              hidden_states, cell_states, context_vec, t)
             logplists.append(logp)
             logdetlosts.append(logdet)
-            end = time.time()
-            print(end - start)
+            # end = time.time()
+            # print(end - start)
             # mel_outputs.append(mel_frames)
             stop_outputs.extend([stop_tokens] * self.r)
             attn_scores.append(scores)
