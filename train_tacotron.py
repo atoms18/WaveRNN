@@ -62,7 +62,7 @@ def main():
                      stop_threshold=hp.tts_stop_threshold).to(device)
 
     optimizer = optim.Adam(model.parameters())
-    # restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
+    restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
@@ -115,7 +115,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
     for g in optimizer.param_groups: g['lr'] = lr
 
     total_iters = len(train_set)
-    print("Total Iterations per Epoch: " + str(total_iters))
     epochs = train_steps // total_iters + 1
 
     scaler = torch.cuda.amp.GradScaler()
@@ -131,8 +130,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
             x, wav = x.to(device), wav.to(device)
             stop_targets = stop_targets.to(device)
 
-            print("Total Steps per Interation: " + str(wav.size(2)//model.r))
-
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
               # Parallelize model onto GPUS using workaround due to python bug
@@ -144,7 +141,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
               nll = -logplists - logdetlosts
               nll = nll / model.decoder_K
               nll = nll.mean()
-
               stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
 
               loss = nll + stop_loss
@@ -156,7 +152,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
                     print('grad_norm was NaN!')
 
             scaler.step(optimizer)
-
             scaler.update()
 
             running_loss += loss.item()
@@ -175,9 +170,9 @@ def tts_train_loop(paths: Paths, model: Tacotron, optimizer, train_set, lr, trai
             if attn_example in ids:
                 idx = ids.index(attn_example)
                 save_attention(np_now(attention[idx][:, :160]), paths.tts_attention/f'{step}')
-                save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
+                # save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
 
-            msg = f'| Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {avg_loss:#.4} | {speed:#.2} steps/s | Step: {k}k | '
+            msg = f'| Epoch: {e}/{epochs} ({i}/{total_iters}) | Loss: {avg_loss:#.4} | {speed:#.2} iteration/s | Step: {k}k | This Iteration\'s Total Steps: {wav.size(2)//model.r} | '
             stream(msg)
 
         # Must save latest optimizer state to ensure that resuming training
