@@ -97,6 +97,7 @@ def collate_vocoder(batch):
 # Tacotron/TTS Dataset ############################################################
 ###################################################################################
 
+from os import path as ppp
 
 def get_tts_datasets(path: Path, batch_size, r):
 
@@ -107,6 +108,8 @@ def get_tts_datasets(path: Path, batch_size, r):
     wav_lengths = []
 
     for (item_id, len) in dataset:
+        if not ppp.exists(path/'norm_wav'/f'{item_id}.npy'): continue
+
         if len <= hp.tts_max_wav_len:
             dataset_ids += [item_id]
             wav_lengths += [len]
