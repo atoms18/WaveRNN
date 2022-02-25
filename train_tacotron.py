@@ -176,7 +176,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 ckpt_name = f'taco_step{step}'
                 save_checkpoint('tts', paths, model, optimizer,
                                 name=ckpt_name, is_silent=True)
-                logger.log_training(running_loss, grad_norm, lr, duration, step)
+                logger.log_training(running_loss, grad_norm, lr, duration, step, None, None)
                 logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
 
             if attn_example in ids:
