@@ -363,7 +363,7 @@ class Tacotron(nn.Module):
         # self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
         # self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
 
-        # self.init_model()
+        self.init_model()
         self.num_params()
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
@@ -520,8 +520,9 @@ class Tacotron(nn.Module):
         return wav_outputs, attn_scores
 
     def init_model(self):
-        for p in self.parameters():
-            if p.dim() > 1: nn.init.xavier_uniform_(p)
+        for name, param in self.named_parameters():
+            if "mixer" not in name and "norm" not in name:
+                if param.dim() > 1: nn.init.xavier_uniform_(param)
 
     def get_step(self):
         return self.step.data.item()

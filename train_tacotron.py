@@ -124,6 +124,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
 
     for g in optimizer.param_groups: g['lr'] = lr
 
+    duration = 0
     total_iters = len(train_set)
     epochs = train_steps // total_iters + 1
 
@@ -180,10 +181,10 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step, None, None)
                 logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
 
-                y_test = torch.rand(1, 5, 96*2)
+                y_test = torch.rand(1, 5, 96*2).to(device)
                 zlast, _, _, zlist = model.decoder.flows(y_test)
                 abc = model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
-                print("Is flow output nan?", zlast.isnan.any(), abc.isnan().any())
+                print("Is flow output nan?", zlast.isnan().any(), abc.isnan().any())
 
             if attn_example in ids:
                 idx = ids.index(attn_example)
