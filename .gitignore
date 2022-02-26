@@ -49,3 +49,4 @@ pip-delete-this-directory.txt
 
 checkpoints/
 model_outputs/
+data/
