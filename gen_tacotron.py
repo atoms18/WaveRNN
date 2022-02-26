@@ -124,7 +124,6 @@ if __name__ == "__main__":
             inputs = [text_to_sequence(l.strip(), hp.tts_cleaner_names) for l in f]
 
     y_test = torch.rand(1, 5, 96*2)
-    xxx = torch.as_tensor(inputs[0], dtype=torch.long, device=device).unsqueeze(0)
     zlast, _, _, zlist = tts_model.decoder.flows(y_test)
     abc = tts_model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
 
