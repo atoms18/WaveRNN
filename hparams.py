@@ -74,7 +74,7 @@ tts_lstm_dims = 256
 tts_num_highways = 4
 tts_dropout = 0.5
 tts_cleaner_names = ['english_cleaners']
-tts_stop_threshold = -3.4           # Value below which audio generation ends.
+tts_stop_threshold = 0.5           # Value below which audio generation ends.
                                     # For example, for a range of [-4, 4], this
                                     # will terminate the sequence at the first
                                     # frame that has all values < -3.4
@@ -82,7 +82,7 @@ tts_stop_threshold = -3.4           # Value below which audio generation ends.
 # Training
 
 tts_R_train = 3
-tts_R_inference = 1
+tts_R_inference = 3
 tts_L = 10
 tts_K = lambda R: 320 * R
 tts_J = lambda R: tts_K(R) // tts_L

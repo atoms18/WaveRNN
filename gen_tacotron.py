@@ -1,3 +1,5 @@
+from sklearn.metrics import consensus_score
+from sympy import construct_domain
 import torch
 from models.fatchord_version import WaveRNN
 from utils import hparams as hp
@@ -9,6 +11,10 @@ from utils.text import text_to_sequence
 from utils.display import save_attention, simple_table
 from utils.dsp import reconstruct_waveform, save_wav
 import numpy as np
+
+import matplotlib
+matplotlib.use("MacOSX")
+import matplotlib.pyplot as plt
 
 if __name__ == "__main__":
 
@@ -109,13 +115,31 @@ if __name__ == "__main__":
                          stop_threshold=hp.tts_stop_threshold).to(device)
 
     tts_load_path = tts_weights if tts_weights else paths.tts_latest_weights
-    # tts_model.load(tts_load_path)
+    tts_model.load(tts_load_path)
 
     if input_text:
         inputs = [text_to_sequence(input_text.strip(), hp.tts_cleaner_names)]
     else:
         with open('sentences.txt') as f:
             inputs = [text_to_sequence(l.strip(), hp.tts_cleaner_names) for l in f]
+
+    y_test = torch.rand(1, 5, 96*2)
+    xxx = torch.as_tensor(inputs[0], dtype=torch.long, device=device).unsqueeze(0)
+    zlast, _, _, zlist = tts_model.decoder.flows(y_test)
+    abc = tts_model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
+
+    plt.figure(1)
+    plt.plot(y_test.view(-1).detach().numpy())
+    plt.figure(2)
+    plt.hist(zlist[0].view(-1).detach().numpy())
+    plt.hist(zlist[1].view(-1).detach().numpy())
+    plt.hist(zlist[2].view(-1).detach().numpy())
+    plt.hist(zlist[3].view(-1).detach().numpy())
+    plt.hist(zlist[4].view(-1).detach().numpy())
+    # plt.plot(zlist[0].view(-1).detach().numpy())
+    plt.figure(3)
+    plt.plot(abc[0].detach().numpy())
+    plt.show()
 
     if args.vocoder == 'wavernn':
         # voc_k = voc_model.get_step() // 1000
@@ -139,10 +163,10 @@ if __name__ == "__main__":
     for i, x in enumerate(inputs, 1):
 
         print(f'\n| Generating {i}/{len(inputs)}')
-        _, m, attention = tts_model.generate(x)
+        wav, attention = tts_model.generate(x)
         # Fix mel spectrogram scaling to be from 0 to 1
-        m = (m + 4) / 8
-        np.clip(m, 0, 1, out=m)
+        # m = (m + 4) / 8
+        # np.clip(m, 0, 1, out=m)
 
         if args.vocoder == 'griffinlim':
             v_type = args.vocoder
@@ -157,6 +181,8 @@ if __name__ == "__main__":
             save_path = paths.tts_output/f'{i}_{v_type}_{tts_k}k.wav'
 
         if save_attn: save_attention(attention, save_path)
+
+        save_wav(wav, save_path)
 
         # if args.vocoder == 'wavernn':
         #     m = torch.tensor(m).unsqueeze(0)

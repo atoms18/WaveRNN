@@ -9,6 +9,8 @@ from typing import Union
 
 from flow.blow import Model as Blow
 from utils import hparams as hp
+import matplotlib
+matplotlib.use("MacOSX")
 import matplotlib.pyplot as plt
 
 class HighwayNetwork(nn.Module):
@@ -300,11 +302,21 @@ class Decoder(nn.Module):
 
         cond_features = res_lstm_x
 
+        # Project Mels
+        # mels = self.mel_proj(x)
+        # mels = mels.view(batch_size, self.n_mels, self.max_r)[:, :, :self.r]
+        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden)
+        cell_states = (rnn1_cell, rnn2_cell, res_lstm_cell)
+
+        # Stop token prediction
+        s = self.stop_proj(cond_features)
+        stop_tokens = torch.sigmoid(s)
 
         # forward ground truth to flows when training
+        flows_input = prenet_in.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
         if self.training:
-            flows_input = prenet_in.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
             z_last, logp, logdet, z_lists = self.flows(flows_input)
+            return logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec]
             # logp = torch.rand(128)
             # logdet = torch.rand(128)
 
@@ -319,19 +331,21 @@ class Decoder(nn.Module):
             # print(h.shape, )
             # [print(f.shape) for f in z_outs]
         else:
-            pass
+            z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16) * 0.7
+            generate_wavs = self.flows.reverse([z_new], reconstruct=True)
+            # abc= self.flows.reverse(z_lists, reconstruct=True)
+            # plt.figure(1)
+            # plt.plot(z_new.view(-1).detach().numpy())
+            # plt.figure(2)
+            # plt.plot(generate_wavs[0].detach().numpy())
+            # print(generate_wavs)
+            # plt.figure(3)
+            # plt.plot(abc[0].detach().numpy())
+            # plt.show()
 
-        # Project Mels
-        # mels = self.mel_proj(x)
-        # mels = mels.view(batch_size, self.n_mels, self.max_r)[:, :, :self.r]
-        hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, res_lstm_hidden)
-        cell_states = (rnn1_cell, rnn2_cell, res_lstm_cell)
-
-        # Stop token prediction
-        s = self.stop_proj(cond_features)
-        stop_tokens = torch.sigmoid(s)
-
-        return logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec]
+            # return
+            # gen_wavs_by_r = generate_wavs.view(batch_size, self.decoder_K, self.r)
+            return generate_wavs, stop_tokens, scores, [hidden_states, cell_states, context_vec]
 
 
 class Tacotron(nn.Module):
@@ -349,7 +363,7 @@ class Tacotron(nn.Module):
         # self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
         # self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
 
-        self.init_model()
+        # self.init_model()
         self.num_params()
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
@@ -470,21 +484,22 @@ class Tacotron(nn.Module):
         encoder_seq_proj = self.encoder_proj(encoder_seq)
 
         # Need a couple of lists for outputs
-        mel_outputs, attn_scores = [], []
+        wav_outputs, attn_scores, stop_outputs = [], [], []
 
         # Run the decoder loop
         for t in range(0, steps, self.r):
-            prenet_in = mel_outputs[-1][:, :, -1] if t > 0 else go_frame
-            mel_frames, scores, hidden_states, cell_states, context_vec = \
+            prenet_in = wav_outputs[-1] if t > 0 else go_frame
+            wav_frames, stop_tokens, scores, [hidden_states, cell_states, context_vec] = \
             self.decoder(encoder_seq, encoder_seq_proj, prenet_in,
                          hidden_states, cell_states, context_vec, t)
-            mel_outputs.append(mel_frames)
+            wav_outputs.append(wav_frames)
             attn_scores.append(scores)
+            stop_outputs.extend([stop_tokens] * self.r)
             # Stop the loop if silent frames present
-            if (mel_frames < self.stop_threshold).all() and t > 10: break
+            if (stop_tokens > self.stop_threshold).all() and t > 10: break
 
         # Concat the mel outputs into sequence
-        mel_outputs = torch.cat(mel_outputs, dim=2)
+        wav_outputs = torch.cat(wav_outputs, dim=1)
 
         # # Post-Process for Linear Spectrograms
         # postnet_out = self.postnet(mel_outputs)
@@ -492,16 +507,17 @@ class Tacotron(nn.Module):
 
 
         # linear = linear.transpose(1, 2)[0].cpu().data.numpy()
-        linear = []
-        mel_outputs = mel_outputs[0].cpu().data.numpy()
+        # linear = []
+        wav_outputs = wav_outputs[0].cpu().data.numpy()
 
         # For easy visualisation
         attn_scores = torch.cat(attn_scores, 1)
         attn_scores = attn_scores.cpu().data.numpy()[0]
+        stop_outputs = torch.cat(stop_outputs, 1)
 
         self.train()
 
-        return mel_outputs, linear, attn_scores
+        return wav_outputs, attn_scores
 
     def init_model(self):
         for p in self.parameters():
