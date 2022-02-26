@@ -349,7 +349,7 @@ class Tacotron(nn.Module):
         # self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
         # self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
 
-        # self.init_model()
+        self.init_model()
         self.num_params()
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
