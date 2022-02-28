@@ -10,8 +10,9 @@ from typing import Union
 from flow.blow import Model as Blow
 from utils import hparams as hp
 import matplotlib
-matplotlib.use("MacOSX")
+# matplotlib.use("MacOSX")
 import matplotlib.pyplot as plt
+from positional_encodings import PositionalEncoding1D
 
 class HighwayNetwork(nn.Module):
     def __init__(self, size):
@@ -237,7 +238,7 @@ class Decoder(nn.Module):
         self.stop_proj = nn.Linear(res_lstm_dims, 1)
 
         # Generative Flows
-        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, ntargets=None, _=None)
+        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, semb=res_lstm_dims)
 
     def zoneout(self, prev, current, p=0.1):
         device = next(self.parameters()).device  # Use same device as parameters
@@ -301,6 +302,12 @@ class Decoder(nn.Module):
             res_lstm_x = res_lstm_x + res_lstm_hidden[i]
 
         cond_features = res_lstm_x
+        # cond_features_upsample = cond_features.unsqueeze(-1).repeat((1, 1, self.decoder_J))
+
+        # pe = PositionalEncoding1D(self.decoder_J)
+        # cond_pe = pe(cond_features_upsample)
+
+        # cond_pe_cat = torch.cat([cond_features_upsample, cond_pe], dim=1)
 
         # Project Mels
         # mels = self.mel_proj(x)
@@ -315,6 +322,7 @@ class Decoder(nn.Module):
         # forward ground truth to flows when training
         flows_input = prenet_in.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
         if self.training:
+            # z_last, logp, logdet, z_lists = self.flows(flows_input, cond_pe_cat)
             z_last, logp, logdet, z_lists = self.flows(flows_input)
             return logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec]
             # logp = torch.rand(128)
@@ -332,6 +340,7 @@ class Decoder(nn.Module):
             # [print(f.shape) for f in z_outs]
         else:
             z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16) * 0.7
+            # generate_wavs = self.flows.reverse([z_new], cond_pe_cat, reconstruct=True)
             generate_wavs = self.flows.reverse([z_new], reconstruct=True)
             # abc= self.flows.reverse(z_lists, reconstruct=True)
             # plt.figure(1)

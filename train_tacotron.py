@@ -72,7 +72,7 @@ def main():
 
     scaler = torch.cuda.amp.GradScaler()
 
-    logger = prepare_directories_and_logger(paths.tts_output, "logdir")
+    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
