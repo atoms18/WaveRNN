@@ -238,7 +238,7 @@ class Decoder(nn.Module):
         self.stop_proj = nn.Linear(res_lstm_dims, 1)
 
         # Generative Flows
-        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, semb=res_lstm_dims)
+        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, semb=res_lstm_dims, ntargets=None, _=None)
 
     def zoneout(self, prev, current, p=0.1):
         device = next(self.parameters()).device  # Use same device as parameters
