@@ -42,7 +42,8 @@ def save_checkpoint(checkpoint_type: str, paths: Paths, model, optimizer, *,
     """
     def helper(path_dict, is_named):
         s = 'named' if is_named else 'latest'
-        num_exist = sum(p.exists() for p in path_dict.values())
+        # num_exist = sum(p.exists() for p in path_dict.values())
+        num_exist = 2
 
         if num_exist not in (0,2):
             # Checkpoint broken
@@ -70,8 +71,8 @@ def save_checkpoint(checkpoint_type: str, paths: Paths, model, optimizer, *,
 
     if name:
         named_paths = {
-            'w': checkpoint_path/f'{name}_weights.pyt',
-            'o': checkpoint_path/f'{name}_optim.pyt',
+            'w': f'/content/drive/MyDrive/Colab Notebooks/voiceclone/nanoutput_weight/{name}_weights.pyt',
+            'o': f'/content/drive/MyDrive/Colab Notebooks/voiceclone/nanoutput_weight/{name}_optim.pyt',
         }
         helper(named_paths, True)
 
