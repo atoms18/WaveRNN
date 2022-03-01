@@ -88,10 +88,8 @@ tts_K = lambda R: 320 * R
 tts_J = lambda R: tts_K(R) // tts_L
 
 tts_schedule = [(1e-3,  10_000,  32),   # progressive training schedule
-                (1e-4, 100_000,  32),   # (r, lr, step, batch_size)
-                (1e-4, 180_000,  32),
-                (1e-4, 350_000,  32),
-                (1e-5, 500_000,  32)]
+                (1e-4,  20_000,  16),   # (r, lr, step, batch_size)
+                (1e-5,  25_000,  8)]
 
 tts_N = 12  # number of flows
 tts_M = 5 # number of blocks
