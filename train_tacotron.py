@@ -185,7 +185,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                     # y_test = torch.rand(1, 5, 96*2).to(device)
                     zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2))
                     abc = model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
-                    print("Reverse-Groundtruth diff: ", wav[0, :, 0] - abc[0])
+                    print("Reverse-Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
 
             if attn_example in ids:
                 idx = ids.index(attn_example)
