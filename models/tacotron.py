@@ -319,8 +319,8 @@ class Decoder(nn.Module):
         cell_states = (attn_cell, rnn1_cell, rnn2_cell, rnn3_cell, rnn4_cell)
 
         # Stop token prediction
-        s = self.stop_proj(cond_features)
-        stop_tokens = torch.sigmoid(s)
+        stop_proj = self.stop_proj(cond_features)
+        # stop_tokens = torch.sigmoid(s)
 
         # forward ground truth to flows when training
         flows_input = yt.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
@@ -340,12 +340,12 @@ class Decoder(nn.Module):
             # plt.figure(3)
             # plt.plot(abc[0].detach().numpy())
             # plt.show()
-            return logp, logdet, stop_tokens, scores, [hidden_states, cell_states, context_vec]
+            return logp, logdet, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
         else:
             z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16) * 0.7
             generate_wavs = self.flows.reverse([z_new], embbeding_features, reconstruct=True)
-            return generate_wavs, stop_tokens, scores, [hidden_states, cell_states, context_vec]
+            return generate_wavs, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
 
 class Tacotron(nn.Module):
