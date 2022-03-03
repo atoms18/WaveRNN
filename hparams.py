@@ -87,9 +87,9 @@ tts_L = 10
 tts_K = lambda R: 320 * R
 tts_J = lambda R: tts_K(R) // tts_L
 
-tts_schedule = [(1e-3,  10_000,  32),   # progressive training schedule
+tts_schedule = [(1e-3,  10_000,  16),   # progressive training schedule
                 (5e-4,  20_000,  16),   # (lr, step, batch_size)
-                (2e-4,  40_000,  16),
+                (2e-4,  40_000,  12),
                 (3e-5,  80_000,  8)]
 
 tts_N = 12  # number of flows
@@ -105,7 +105,7 @@ tts_max_wav_len = 1_440_000             # 60 seconds
 # tts_max_mel_len = 1250              # if you have a couple of extremely long spectrograms you might want to use this
 tts_bin_lengths = False              # bins the spectrogram lengths before sampling in data loader - speeds up training
 tts_clip_grad_norm = 1.0            # clips the gradient norm to prevent explosion - set to None if not needed
-tts_checkpoint_every = 100        # checkpoints the model every X steps
+tts_checkpoint_every = 500        # checkpoints the model every X steps
 # TODO: tts_phoneme_prob = 0.0              # [0 <-> 1] probability for feeding model phonemes vrs graphemes
 
 
