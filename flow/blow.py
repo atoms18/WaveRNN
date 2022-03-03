@@ -338,8 +338,8 @@ class AffineCoupling(torch.nn.Module):
         self.affine = affine
 
         self.net = torch.nn.Sequential(
-            torch.nn.Conv1d(in_channel // 2, filter_size, 3, padding=1),
-            # torch.nn.Conv1d(in_channel // 2 + semb, filter_size, 3, padding=1),
+            # torch.nn.Conv1d(in_channel // 2, filter_size, 3, padding=1),
+            torch.nn.Conv1d(in_channel // 2 + semb, filter_size, 3, padding=1),
             torch.nn.ReLU(inplace=True),
             torch.nn.Conv1d(filter_size, filter_size, 1),
             torch.nn.ReLU(inplace=True),
@@ -359,8 +359,8 @@ class AffineCoupling(torch.nn.Module):
         in_a, in_b = input.chunk(2, 1)
 
         if self.affine:
-            log_s, t = self.net(in_a).chunk(2, 1)
-            # log_s, t = self.net(torch.cat([in_a, emb], dim=1)).chunk(2, 1)
+            # log_s, t = self.net(in_a).chunk(2, 1)
+            log_s, t = self.net(torch.cat([in_a, emb], dim=1)).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
             # out_a = s * in_a + t
@@ -380,7 +380,7 @@ class AffineCoupling(torch.nn.Module):
 
         if self.affine:
             log_s, t = self.net(out_a).chunk(2, 1)
-            # log_s, t = self.net(torch.cat([out_a, emb], dim=1)).chunk(2, 1)
+            log_s, t = self.net(torch.cat([out_a, emb], dim=1)).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
             # in_a = (out_a - t) / s

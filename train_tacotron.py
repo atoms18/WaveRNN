@@ -186,8 +186,8 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
 
                 with torch.no_grad():
-                    zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0])
-                    abc = model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
+                    zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
+                    abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
                     print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
 
             if attn_example in ids:
