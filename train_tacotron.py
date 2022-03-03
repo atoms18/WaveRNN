@@ -17,6 +17,9 @@ import sys
 from utils.checkpoints import save_checkpoint, restore_checkpoint
 from logger import Tacotron2Logger
 
+import matplotlib
+matplotlib.use("MacOSX")
+
 def np_now(x: torch.Tensor): return x.detach().cpu().numpy()
 
 def prepare_directories_and_logger(output_directory, log_directory):
@@ -68,11 +71,12 @@ def main():
                      stop_threshold=hp.tts_stop_threshold).to(device)
 
     optimizer = optim.Adam(model.parameters())
-    restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
+    # restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
 
     scaler = torch.cuda.amp.GradScaler()
 
-    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
+    # logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
+    logger = prepare_directories_and_logger(paths.tts_output, "logdir")
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
@@ -138,7 +142,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
 
             x, wav = x.to(device), wav.to(device)
             stop_targets = stop_targets.to(device)
-            # print(f"This Iteration\'s Total Steps: {wav.size(2)//model.r}\n")
+            stop_targets.requires_grad = False
 
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
@@ -149,7 +153,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                   logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
               nll = -logplists - logdetlosts
-              nll = nll / model.decoder_K
+            #   nll = nll / model.decoder_K
               nll = nll.mean()
               stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
 
@@ -182,10 +186,9 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
 
                 with torch.no_grad():
-                    # y_test = torch.rand(1, 5, 96*2).to(device)
-                    zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2))
+                    zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0])
                     abc = model.decoder.flows.reverse([zlist[-1]], reconstruct=True)
-                    print("Reverse-Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
+                    print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
 
             if attn_example in ids:
                 idx = ids.index(attn_example)

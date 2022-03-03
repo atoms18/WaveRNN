@@ -3,23 +3,7 @@ import torch
 
 from torch.nn import functional as F
 from math import log, pi, exp
-# from utils import audio
-
-def proc_problematic_samples(x,soft=True):
-    x[torch.isnan(x)]=0
-    if soft:
-        x=softclamp(x)
-    else:
-        x=torch.clamp(x,-1,1)
-    return x
-
-def softclamp(x,mx=1,margin=0.03,alpha=0.7,clipval=100):
-    x=torch.clamp(x,-clipval,clipval)
-    xabs=x.abs()
-    rmargin=mx-margin
-    mask=(xabs<rmargin).float()
-    x=mask*x+(1-mask)*torch.sign(x)*((1-torch.exp(-alpha*(xabs-rmargin)/margin))*margin+rmargin)
-    return x
+from flow.utils import proc_problematic_samples
 
 ########################################################################################################################
 ########################################################################################################################
@@ -33,17 +17,17 @@ def gaussian_sample(eps, mean, log_sd):
 
 class Model(torch.nn.Module):
 
-    def __init__(self,sqfactor,nblocks,nflows,ncha,ntargets,_,semb=128):
+    def __init__(self,sqfactor,nblocks,nflows,ncha,semb=128):
         super(Model,self).__init__()
 
         nsq=10
         print('Channels/squeeze = ',end='')
         self.blocks=torch.nn.ModuleList()
-        for _ in range(nblocks - 1):
-            self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb))
+        for b in range(nblocks - 1):
+            self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb,block_number=b))
             print('{:d}, '.format(nsq),end='')
             nsq*=sqfactor
-        self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb))
+        self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb,block_number=b+1))
         print('{:d}, '.format(nsq),end='')
         print()
         self.final_nsq=nsq
@@ -52,17 +36,17 @@ class Model(torch.nn.Module):
 
         return
 
-    def forward(self,h):
+    def forward(self,h,emb=None):
         # Prepare
         sbatch,begin_nsq,begin_lchunk=h.size()
         # h=h.unsqueeze(1)
-        # emb=self.embedding(s)
+        averaging_emb = self.averaging_adjacent_embedding(emb)
         # Run blocks & accumulate log-det
         log_det=0
         z_lists = []
         log_p_sum = 0
         for block in self.blocks:
-            h,ldet,log_p=block.forward(h)
+            h,ldet,log_p=block.forward(h,averaging_emb)
             z_lists.append(h)
             log_det+=ldet
 
@@ -72,24 +56,34 @@ class Model(torch.nn.Module):
         z_last=h.view(sbatch,-1)
         return z_last,log_p_sum,log_det,z_lists
 
-    def reverse(self,z_list,reconstruct=False):
+    def reverse(self,z_list,emb=None,reconstruct=False):
         # Prepare
         sbatch,nsq,lchunk=z_list[-1].size()
         # h=h.view(sbatch,self.final_nsq,lchunk//self.final_nsq)
-        # emb=self.embedding(s)
+        averaging_emb = self.averaging_adjacent_embedding(emb)
         # Run blocks
         h = z_list[-1]
         for i, block in enumerate(self.blocks[::-1]):
             if i == 0:
-                h = block.reverse(h, h, reconstruct=reconstruct)
+                h = block.reverse(h, h, averaging_emb, reconstruct=reconstruct)
             else:
                 prev_z_list = h if len(z_list) == 1 else z_list[-(i + 1)]
-                h = block.reverse(h, prev_z_list, reconstruct=reconstruct)
+                h = block.reverse(h, prev_z_list, averaging_emb, reconstruct=reconstruct)
         # Back to original dim
         h=h.view(sbatch,-1)
         # Postproc
         h=proc_problematic_samples(h)
         return h
+
+    def averaging_adjacent_embedding(self, emb):
+        adjacent_num = 2
+        adjacent_emb = []
+        adjacent_emb.append(emb)
+        for b in range(len(self.blocks) - 1):
+            emb = emb.view(emb.size(0), -1, adjacent_num).mean(axis=2).view(emb.size(0), emb.size(1), -1)
+            adjacent_emb.append(emb)
+        
+        return adjacent_emb
 
     def precalc_matrices(self,mode):
         if mode!='on' and mode!='off':
@@ -111,9 +105,11 @@ class Model(torch.nn.Module):
 
 class Block(torch.nn.Module):
 
-    def __init__(self,sqfactor,nflows,nsq,ncha,semb):
+    def __init__(self,sqfactor,nflows,nsq,ncha,semb,block_number):
         super(Block,self).__init__()
 
+        self.block_number = block_number
+        
         self.squeeze=Squeezer(factor=sqfactor)
         self.flows=torch.nn.ModuleList()
         for _ in range(nflows):
@@ -128,13 +124,13 @@ class Block(torch.nn.Module):
 
         return
 
-    def forward(self,h):
+    def forward(self,h,emb):
         # Squeeze
         h=self.squeeze.forward(h)
         # Run flows & accumulate log-det
         log_det=0
         for flow in self.flows:
-            h,ldet=flow.forward(h)
+            h,ldet=flow.forward(h,emb[self.block_number])
             log_det+=ldet
         
         z, ldet = self.actnorm(h)
@@ -147,7 +143,7 @@ class Block(torch.nn.Module):
 
         return z,log_det,log_p
 
-    def reverse(self,z,eps=None,reconstruct=False):
+    def reverse(self,z,eps,emb,reconstruct=False):
         input = z
 
         if reconstruct:
@@ -164,7 +160,7 @@ class Block(torch.nn.Module):
 
         # Run flows
         for flow in self.flows[::-1]:
-            input=flow.reverse(input)
+            input=flow.reverse(input, emb[self.block_number])
         
         # Unsqueeze
         input=self.squeeze.reverse(input)
@@ -179,22 +175,22 @@ class Flow(torch.nn.Module):
 
         self.norm=ActNorm(nsq)
         self.mixer=InvConv(nsq)
-        self.coupling=AffineCoupling(nsq,ncha,affine=True)
+        self.coupling=AffineCoupling(nsq,semb,ncha,affine=True)
 
         return
 
-    def forward(self,h):
+    def forward(self,h,emb):
         logdet=0
         h,ld=self.norm.forward(h)
         logdet=logdet+ld
         h,ld=self.mixer.forward(h)
         logdet=logdet+ld
-        h,ld=self.coupling.forward(h)
+        h,ld=self.coupling.forward(h,emb)
         logdet=logdet+ld
         return h,logdet
 
-    def reverse(self,h):
-        h=self.coupling.reverse(h)
+    def reverse(self,h,emb):
+        h=self.coupling.reverse(h,emb)
         h=self.mixer.reverse(h)
         h=self.norm.reverse(h)
         return h
@@ -336,13 +332,14 @@ class ActNorm(torch.nn.Module):
 ########################################################################################################################
 
 class AffineCoupling(torch.nn.Module):
-    def __init__(self, in_channel, filter_size=256, affine=True):
+    def __init__(self, in_channel, semb, filter_size=256, affine=True):
         super().__init__()
 
         self.affine = affine
 
         self.net = torch.nn.Sequential(
-            torch.nn.Conv1d(in_channel // 2, filter_size, 3, padding=1),
+            # torch.nn.Conv1d(in_channel // 2, filter_size, 3, padding=1),
+            torch.nn.Conv1d(in_channel // 2 + semb, filter_size, 3, padding=1),
             torch.nn.ReLU(inplace=True),
             torch.nn.Conv1d(filter_size, filter_size, 1),
             torch.nn.ReLU(inplace=True),
@@ -358,11 +355,12 @@ class AffineCoupling(torch.nn.Module):
         self.net[-1].weight.data.zero_()
         self.net[-1].bias.data.zero_()
 
-    def forward(self, input):
+    def forward(self, input, emb):
         in_a, in_b = input.chunk(2, 1)
 
         if self.affine:
-            log_s, t = self.net(in_a).chunk(2, 1)
+            # log_s, t = self.net(in_a).chunk(2, 1)
+            log_s, t = self.net(torch.cat([in_a, emb], dim=1)).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
             # out_a = s * in_a + t
@@ -377,11 +375,12 @@ class AffineCoupling(torch.nn.Module):
 
         return torch.cat([in_a, out_b], 1), logdet
 
-    def reverse(self, output):
+    def reverse(self, output, emb):
         out_a, out_b = output.chunk(2, 1)
 
         if self.affine:
-            log_s, t = self.net(out_a).chunk(2, 1)
+            # log_s, t = self.net(out_a).chunk(2, 1)
+            log_s, t = self.net(torch.cat([out_a, emb], dim=1)).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
             # in_a = (out_a - t) / s
