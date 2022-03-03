@@ -379,7 +379,7 @@ class AffineCoupling(torch.nn.Module):
         out_a, out_b = output.chunk(2, 1)
 
         if self.affine:
-            log_s, t = self.net(out_a).chunk(2, 1)
+            # log_s, t = self.net(out_a).chunk(2, 1)
             log_s, t = self.net(torch.cat([out_a, emb], dim=1)).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
