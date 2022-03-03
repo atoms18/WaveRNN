@@ -71,12 +71,12 @@ def main():
                      stop_threshold=hp.tts_stop_threshold).to(device)
 
     optimizer = optim.Adam(model.parameters())
-    # restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
+    restore_checkpoint('tts', paths, model, optimizer, create_if_missing=True)
 
     scaler = torch.cuda.amp.GradScaler()
 
-    # logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
-    logger = prepare_directories_and_logger(paths.tts_output, "logdir")
+    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
+    # logger = prepare_directories_and_logger(paths.tts_output, "logdir")
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
