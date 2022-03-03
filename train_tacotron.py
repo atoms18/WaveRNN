@@ -18,7 +18,7 @@ from utils.checkpoints import save_checkpoint, restore_checkpoint
 from logger import Tacotron2Logger
 
 import matplotlib
-matplotlib.use("MacOSX")
+# matplotlib.use("MacOSX")
 
 def np_now(x: torch.Tensor): return x.detach().cpu().numpy()
 
