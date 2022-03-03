@@ -173,7 +173,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
 
             prev_duration = duration
             duration = (time.time() - start)
-            speed = i / duration
+            speed = duration / i
 
             step = model.get_step()
             # k = step // 1000
@@ -195,7 +195,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                 save_attention(np_now(attention[idx][:, :160]), paths.tts_attention/f'{step}')
                 # save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
 
-            msg = f'|Epoch: {e}/{epochs} ({i}/{total_iters}) | Avg Loss: {avg_loss:#.4} | NLL: {loss.item():#.4} | {speed:#.2} iteration/s | Step: {step} | '
+            msg = f'|Epoch: {e}/{epochs} ({i}/{total_iters}) | Avg Loss: {avg_loss:#.4} | NLL: {nll.item():#.4} | StopLoss: {stop_loss.item():#.4} | {speed:#.2} s/iteration | Step: {step} | '
             print(msg)
 
         # Must save latest optimizer state to ensure that resuming training
