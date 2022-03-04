@@ -45,5 +45,5 @@ class Tacotron2Logger(SummaryWriter):
             "gate",
             plot_gate_outputs_to_numpy(
                 gate_targets[idx].data.cpu().numpy(),
-                gate_outputs[idx].data.cpu().numpy()),
+                torch.sigmoid(gate_outputs[idx]).data.cpu().numpy()),
             iteration, dataformats='HWC')

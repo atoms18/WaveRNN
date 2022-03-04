@@ -153,7 +153,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                   logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
               nll = -logplists - logdetlosts
-            #   nll = nll / model.decoder_K
+              nll = nll / (wav.shape[2] / model.r)
               nll = nll.mean()
               stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
 
