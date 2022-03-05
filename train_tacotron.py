@@ -173,7 +173,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
             running_loss += loss.item()
             avg_loss = running_loss / i
 
-            prev_duration = duration
             duration = (time.time() - start)
             speed = duration / i
 
@@ -185,9 +184,12 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                     ckpt_name = f'taco_step{step}'
                     save_checkpoint('tts', paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
-                    logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step)
+                    logger.log_training(loss.item(), grad_norm, lr, speed, step)
 
                     for k, (x_eval, wav_eval, ids_eval, _, stop_targets_eval) in enumerate(test_set, 1):
+                        x_eval, wav_eval = x_eval.to(device), wav_eval.to(device)
+                        stop_targets_eval = stop_targets_eval.to(device)
+
                         logplists_, logdetlosts_, attention_, stop_outputs_ = model(x_eval, wav_eval)
 
                         nll_ = -logplists_ - logdetlosts_
