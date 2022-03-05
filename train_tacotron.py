@@ -115,18 +115,20 @@ def main():
         print('To continue training increase tts_total_steps in hparams.py or use --force_train\n')
 
 
-    print('Creating Ground Truth Aligned Dataset...\n')
+    # print('Creating Ground Truth Aligned Dataset...\n')
 
-    train_set, attn_example = get_tts_datasets(paths.data, 8, model.r)
-    create_gta_features(model, train_set, paths.gta)
+    # train_set, attn_example = get_tts_datasets(paths.data, 8, model.r)
+    # create_gta_features(model, train_set, paths.gta)
 
-    print('\n\nYou can now train WaveRNN on GTA features - use python train_wavernn.py --gta\n')
+    # print('\n\nYou can now train WaveRNN on GTA features - use python train_wavernn.py --gta\n')
 
 
 def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, train_set, lr, train_steps, attn_example):
     device = next(model.parameters()).device  # use same device as model parameters
 
     for g in optimizer.param_groups: g['lr'] = lr
+
+    test_set, train_set = train_set
 
     duration = 0
     total_iters = len(train_set)
@@ -183,12 +185,24 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                     ckpt_name = f'taco_step{step}'
                     save_checkpoint('tts', paths, model, optimizer,
                                     name=ckpt_name, is_silent=True)
-                    logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step, None, None)
-                    logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
+                    logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step)
 
-                    zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
-                    abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
-                    print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
+                    for k, (x_eval, wav_eval, ids_eval, _, stop_targets_eval) in enumerate(test_set, 1):
+                        logplists_, logdetlosts_, attention_, stop_outputs_ = model(x_eval, wav_eval)
+
+                        nll_ = -logplists_ - logdetlosts_
+                        nll_ = nll_ / (wav_eval.shape[2] / model.r) / wav_eval.shape[1]
+                        nll_ = nll_.mean()
+                        stop_loss_ = F.binary_cross_entropy_with_logits(stop_outputs_, stop_targets_eval)
+
+                        loss_ = nll_ + stop_loss_
+                        break # validate for first 8 batchs 
+
+                    # zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
+                    # abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
+                    # print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
+
+                    logger.log_validation(loss_.item(), stop_targets_eval, [stop_outputs_, attention_], step)
 
             if attn_example in ids:
                 idx = ids.index(attn_example)

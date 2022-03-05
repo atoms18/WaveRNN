@@ -107,17 +107,21 @@ def get_tts_datasets(path: Path, batch_size, r):
     dataset_ids = []
     wav_lengths = []
 
-    for (item_id, len) in dataset:
+    for (item_id, length) in dataset:
         if not ppp.exists(path/'norm_wav'/f'{item_id}.npy'): continue
 
-        if len <= hp.tts_max_wav_len:
+        if length <= hp.tts_max_wav_len:
             dataset_ids += [item_id]
-            wav_lengths += [len]
+            wav_lengths += [length]
 
     with open(path/'text_dict.pkl', 'rb') as f:
         text_dict = pickle.load(f)
 
-    train_dataset = TTSDataset(path, dataset_ids, text_dict)
+    num_all_datasets = len(dataset_ids)
+
+    train_ratio = 0.99
+    train_dataset = TTSDataset(path, dataset_ids[:int(train_ratio*num_all_datasets)], text_dict)
+    test_dataset = TTSDataset(path, dataset_ids[int(train_ratio*num_all_datasets):], text_dict)
 
     sampler = None
 
@@ -131,6 +135,14 @@ def get_tts_datasets(path: Path, batch_size, r):
                            num_workers=0,
                            pin_memory=True)
 
+    test_set = DataLoader(test_dataset,
+                           collate_fn=lambda batch: collate_tts(batch, r),
+                           batch_size=8,
+                           shuffle=True,
+                           sampler=sampler,
+                           num_workers=0,
+                           pin_memory=True)
+
     longest = wav_lengths.index(max(wav_lengths))
 
     # Used to evaluate attention during training process
@@ -138,7 +150,7 @@ def get_tts_datasets(path: Path, batch_size, r):
 
     # print(attn_example)
 
-    return train_set, attn_example
+    return [test_set, train_set], attn_example
 
 
 class TTSDataset(Dataset):
