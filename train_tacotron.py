@@ -75,8 +75,8 @@ def main():
 
     scaler = torch.cuda.amp.GradScaler()
 
-    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/full_wave_tacotron_model/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
-    # logger = prepare_directories_and_logger(paths.tts_output, "logdir")
+    # logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/full_wave_tacotron_model/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
+    logger = prepare_directories_and_logger(paths.tts_output, "logdir")
 
     if not force_gta:
         for i, session in enumerate(hp.tts_schedule):
@@ -153,7 +153,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                   logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
               nll = -logplists - logdetlosts
-              nll = nll / (wav.shape[2] / model.r)
+              nll = nll / (wav.shape[2] / model.r) / wav.shape[1]
               nll = nll.mean()
               stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
 
@@ -179,13 +179,13 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
             # k = step // 1000
 
             if step % hp.tts_checkpoint_every == 0 or step == 1:
-                ckpt_name = f'taco_step{step}'
-                save_checkpoint('tts', paths, model, optimizer,
-                                name=ckpt_name, is_silent=True)
-                logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step, None, None)
-                logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
-
                 with torch.no_grad():
+                    ckpt_name = f'taco_step{step}'
+                    save_checkpoint('tts', paths, model, optimizer,
+                                    name=ckpt_name, is_silent=True)
+                    logger.log_training(loss.item(), grad_norm, lr, duration - prev_duration, step, None, None)
+                    logger.log_validation(None, None, stop_targets, [stop_outputs, attention], step)
+
                     zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
                     abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
                     print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())

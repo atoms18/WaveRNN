@@ -320,7 +320,6 @@ class Decoder(nn.Module):
 
         # Stop token prediction
         stop_proj = self.stop_proj(cond_features)
-        # stop_tokens = torch.sigmoid(s)
 
         # forward ground truth to flows when training
         flows_input = yt.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
@@ -360,8 +359,6 @@ class Tacotron(nn.Module):
         self.encoder_proj = nn.Linear(decoder_dims, decoder_dims, bias=False)
         self.decoder = Decoder(decoder_R, self.decoder_K, decoder_dims, lstm_dims)
         self.r = decoder_R
-        # self.postnet = CBHG(postnet_K, n_mels, postnet_dims, [256, 80], num_highways)
-        # self.post_proj = nn.Linear(postnet_dims * 2, fft_bins, bias=False)
 
         self.init_model()
         self.num_params()
