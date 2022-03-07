@@ -18,7 +18,7 @@ class Tacotron2Logger(SummaryWriter):
 
     def log_validation(self, val_loss, y, y_pred, iteration):
         self.add_scalar("validation.loss", val_loss, iteration)
-        gate_outputs, alignments = y_pred
+        gate_outputs, alignments, val_mel = y_pred
         gate_targets = y
 
         # plot distribution of parameters
@@ -32,10 +32,10 @@ class Tacotron2Logger(SummaryWriter):
             "alignment",
             plot_alignment_to_numpy(alignments[idx].data.cpu().numpy().T),
             iteration, dataformats='HWC')
-        # self.add_image(
-        #     "mel_target",
-        #     plot_spectrogram_to_numpy(mel_targets[idx].data.cpu().numpy()),
-        #     iteration, dataformats='HWC')
+        self.add_image(
+            "mel-spectrogram of generated sample",
+            plot_spectrogram_to_numpy(val_mel[idx].data.cpu().numpy()),
+            iteration, dataformats='HWC')
         # self.add_image(
         #     "mel_predicted",
         #     plot_spectrogram_to_numpy(mel_outputs[idx].data.cpu().numpy()),

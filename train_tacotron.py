@@ -16,6 +16,7 @@ import numpy as np
 import sys
 from utils.checkpoints import save_checkpoint, restore_checkpoint
 from logger import Tacotron2Logger
+from utils.dsp import melspectrogram
 
 import matplotlib
 # matplotlib.use("MacOSX")
@@ -186,7 +187,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                                     name=ckpt_name, is_silent=True)
                     logger.log_training(loss.item(), grad_norm, lr, speed, step)
 
-                    for k, (x_eval, wav_eval, ids_eval, _, stop_targets_eval) in enumerate(test_set, 1):
+                    for _, (x_eval, wav_eval, _, _, stop_targets_eval) in enumerate(test_set, 1):
                         x_eval, wav_eval = x_eval.to(device), wav_eval.to(device)
                         stop_targets_eval = stop_targets_eval.to(device)
 
@@ -198,17 +199,20 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                         stop_loss_ = F.binary_cross_entropy_with_logits(stop_outputs_, stop_targets_eval)
 
                         loss_ = nll_ + stop_loss_
+
+                        wav_outputs_, _ = model.generate(x_eval)
+                        val_mel = melspectrogram(wav_outputs_)
                         break # validate for first 8 batchs 
 
                     # zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
                     # abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
                     # print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
 
-                    logger.log_validation(loss_.item(), stop_targets_eval, [stop_outputs_, attention_], step)
+                    logger.log_validation(loss_.item(), stop_targets_eval, [stop_outputs_, attention_, val_mel], step)
 
             if attn_example in ids:
                 idx = ids.index(attn_example)
-                save_attention(np_now(attention[idx][:, :160]), paths.tts_attention/f'{step}')
+                save_attention(np_now(attention[idx][:, :]), paths.tts_attention/f'{step}')
                 # save_spectrogram(np_now(m2_hat[idx]), paths.tts_mel_plot/f'{step}', 600)
 
             msg = f'|Epoch: {e}/{epochs} ({i}/{total_iters}) | Avg Loss: {avg_loss:#.4} | NLL: {nll.item():#.4} | StopLoss: {stop_loss.item():#.4} | {speed:#.2} s/iteration | Step: {step} | '
