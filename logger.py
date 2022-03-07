@@ -34,7 +34,7 @@ class Tacotron2Logger(SummaryWriter):
             iteration, dataformats='HWC')
         self.add_image(
             "mel-spectrogram of generated sample",
-            plot_spectrogram_to_numpy(val_mel[idx].data.cpu().numpy()),
+            plot_spectrogram_to_numpy(val_mel),
             iteration, dataformats='HWC')
         # self.add_image(
         #     "mel_predicted",

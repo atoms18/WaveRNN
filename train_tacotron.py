@@ -200,7 +200,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
 
                         loss_ = nll_ + stop_loss_
 
-                        wav_outputs_, _ = model.generate(x_eval)
+                        wav_outputs_, _ = model.generate(x_eval[0])
                         val_mel = melspectrogram(wav_outputs_)
                         break # validate for first 8 batchs 
 

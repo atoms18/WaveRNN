@@ -11,6 +11,7 @@ from flow.blow import Model as Blow
 from utils import hparams as hp
 import matplotlib.pyplot as plt
 from positional_encodings import PositionalEncoding1D
+from utils.dsp import de_emphasis
 
 class HighwayNetwork(nn.Module):
     def __init__(self, size):
@@ -312,9 +313,6 @@ class Decoder(nn.Module):
         cond_pe = pe(cond_features_upsample)
         embbeding_features = torch.cat([cond_features_upsample, cond_pe], dim=1)
 
-        # Project Mels
-        # mels = self.mel_proj(x)
-        # mels = mels.view(batch_size, self.n_mels, self.max_r)[:, :, :self.r]
         hidden_states = (attn_hidden, rnn1_hidden, rnn2_hidden, rnn3_hidden, rnn4_hidden)
         cell_states = (attn_cell, rnn1_cell, rnn2_cell, rnn3_cell, rnn4_cell)
 
@@ -322,8 +320,8 @@ class Decoder(nn.Module):
         stop_proj = self.stop_proj(cond_features)
 
         # forward ground truth to flows when training
-        flows_input = yt.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
         if self.training:
+            flows_input = yt.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
             z_last, logp, logdet, z_lists = self.flows(flows_input, embbeding_features)
             if t == 0: self.step_zero_embbeding_features = embbeding_features
             # z_last, logp, logdet, z_lists = self.flows(flows_input)
@@ -342,7 +340,8 @@ class Decoder(nn.Module):
             return logp, logdet, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
         else:
-            z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16) * 0.7
+            device = next(self.parameters()).device
+            z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16).to(device) * 0.7
             generate_wavs = self.flows.reverse([z_new], embbeding_features, reconstruct=True)
             return generate_wavs, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
