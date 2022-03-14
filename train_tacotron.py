@@ -76,7 +76,7 @@ def main():
 
     scaler = torch.cuda.amp.GradScaler()
 
-    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/voiceclone/full_wt2_model/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
+    logger = prepare_directories_and_logger("/content/drive/MyDrive/Colab Notebooks/VoiceClone/full_wt2_model/model_outputs/ljspeech_lsa_smooth_attention", "logdir")
     # logger = prepare_directories_and_logger(paths.tts_output, "logdir")
 
     if not force_gta:
