@@ -17,66 +17,79 @@ def gaussian_sample(eps, mean, log_sd):
 
 class Model(torch.nn.Module):
 
-    def __init__(self,sqfactor,nblocks,nflows,ncha,semb=128):
+    def __init__(self,sqfactor,nblocks,nflows,ncha,semb=128,block_per_split=3):
         super(Model,self).__init__()
 
+        self.block_per_split = block_per_split
+        self.sqfactor = sqfactor
+        self.nblocks = nblocks
+
         nsq=10
-        print('Channels/squeeze = ',end='')
         self.blocks=torch.nn.ModuleList()
-        for b in range(nblocks - 1):
-            self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb,block_number=b))
-            print('{:d}, '.format(nsq),end='')
-            nsq*=sqfactor
-        self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb,block_number=b+1))
-        print('{:d}, '.format(nsq),end='')
-        print()
+        for b in range(nblocks):
+            split = False if (b + 1) % self.block_per_split or b == nblocks - 1 else True
+            self.blocks.append(Block(sqfactor,nflows,nsq,ncha,semb,block_number=b,split=split))
+            if not split:
+                nsq *= 2
         self.final_nsq=nsq
 
-        # self.embedding=torch.nn.Embedding(ntargets,semb)
-
-        return
+        self.squeeze=Squeezer(factor=sqfactor)
 
     def forward(self,h,emb=None):
+        B, _, T = h.size()
+
         # Prepare
-        sbatch,begin_nsq,begin_lchunk=h.size()
-        # h=h.unsqueeze(1)
-        averaging_emb = self.averaging_adjacent_embedding(emb)
+        averaging_emb = None
+        if emb != None:
+            averaging_emb = self.averaging_adjacent_embedding(emb)
+
         # Run blocks & accumulate log-det
-        log_det=0
-        z_lists = []
-        log_p_sum = 0
+        log_det, log_p_sum = 0, 0
+        out = h
+        z_list = []
         for block in self.blocks:
-            h,ldet,log_p=block.forward(h,averaging_emb)
-            z_lists.append(h)
+            out,ldet,log_p,z=block.forward(out,averaging_emb)
+            if z != None: z_list.append(z)
             log_det+=ldet
 
             if log_p is not None:
                 log_p_sum = log_p_sum + log_p
-        # Back to original dim
-        z_last=h.view(sbatch,-1)
-        return z_last,log_p_sum,log_det,z_lists
+        log_p_sum += 0.5 * (- log(2.0 * pi) - out.pow(2)).sum()
 
-    def reverse(self,z_list,emb=None,reconstruct=False):
+        log_det = log_det / (B * T)
+        log_p_sum = log_p_sum / (B * T)
+        return out,log_p_sum,log_det,z_list
+
+    def reverse(self,z,emb=None,z_list=[]):
         # Prepare
-        sbatch,nsq,lchunk=z_list[-1].size()
-        # h=h.view(sbatch,self.final_nsq,lchunk//self.final_nsq)
-        averaging_emb = self.averaging_adjacent_embedding(emb)
+        sbatch = z.size(0)
+
+        averaging_emb = None
+        if emb != None:
+            averaging_emb = self.averaging_adjacent_embedding(emb)
+        
+        x = z
+        if len(z_list) <= 0:
+            for i in range(self.nblocks):
+                x = self.squeeze.forward(x)
+                if not ((i + 1) % self.block_per_split or i == self.nblocks - 1):
+                    x, z = x.chunk(2, 1)
+                    z_list.append(z)
         # Run blocks
-        h = z_list[-1]
         for i, block in enumerate(self.blocks[::-1]):
-            if i == 0:
-                h = block.reverse(h, h, averaging_emb, reconstruct=reconstruct)
+            index = self.nblocks - i
+            if not (index % self.block_per_split or index == self.nblocks):
+                x = block.reverse(x, averaging_emb, z_list[index // self.block_per_split - 1])
             else:
-                prev_z_list = h if len(z_list) == 1 else z_list[-(i + 1)]
-                h = block.reverse(h, prev_z_list, averaging_emb, reconstruct=reconstruct)
+                x = block.reverse(x, averaging_emb)
         # Back to original dim
-        h=h.view(sbatch,-1)
+        h=x.view(sbatch, -1)
         # Postproc
         h=proc_problematic_samples(h)
         return h
 
     def averaging_adjacent_embedding(self, emb):
-        adjacent_num = 2
+        adjacent_num = self.sqfactor
         adjacent_emb = []
         adjacent_emb.append(emb)
         for b in range(len(self.blocks) - 1):
@@ -105,62 +118,62 @@ class Model(torch.nn.Module):
 
 class Block(torch.nn.Module):
 
-    def __init__(self,sqfactor,nflows,nsq,ncha,semb,block_number):
+    def __init__(self,sqfactor,nflows,nsq,ncha,semb,block_number,split=False):
         super(Block,self).__init__()
 
         self.block_number = block_number
+        self.split = split
+        squeeze_dim = nsq * 2
         
         self.squeeze=Squeezer(factor=sqfactor)
+
         self.flows=torch.nn.ModuleList()
         for _ in range(nflows):
-            self.flows.append(Flow(nsq,ncha,semb))
-        
-        self.actnorm = ActNorm(nsq)
+            self.flows.append(Flow(squeeze_dim,ncha,semb))
+        self.actnorm = ActNorm(squeeze_dim)
 
-        self.prior = torch.nn.Conv1d(nsq, nsq * 2, 3, padding=1)
-        self.prior.weight.data.zero_()
-        self.prior.bias.data.zero_()
-        
-
-        return
+        if self.split:
+            self.prior = CouplingNet(squeeze_dim // 2, squeeze_dim, filter_size=256)
 
     def forward(self,h,emb):
         # Squeeze
-        h=self.squeeze.forward(h)
+        out=self.squeeze.forward(h)
         # Run flows & accumulate log-det
         log_det=0
         for flow in self.flows:
-            h,ldet=flow.forward(h,emb[self.block_number])
+            embb = None
+            if emb != None:
+                embb = emb[self.block_number]
+            out,ldet=flow.forward(out, embb)
             log_det+=ldet
-        
-        z, ldet = self.actnorm(h)
+        out, ldet = self.actnorm(out)
         log_det+=ldet
 
-        zero = torch.zeros_like(h)
-        mean, log_sd = self.prior(zero).chunk(2, 1)
-        log_p = gaussian_log_p(z, mean, log_sd)
-        log_p = log_p.view(z.size(0), -1).sum(1)
+        z = None
+        log_p = 0
+        if self.split:
+            out, z = out.chunk(2, 1)
+            mean, log_sd = self.prior(out).chunk(2, 1)
+            log_p = gaussian_log_p(z, mean, log_sd).sum()
 
-        return z,log_det,log_p
+        return out,log_det,log_p,z
 
-    def reverse(self,z,eps,emb,reconstruct=False):
-        input = z
+    def reverse(self,output, emb, eps=None):
+        if self.split:
+            mean, log_sd = self.prior(output).chunk(2, 1)
+            z_new = gaussian_sample(eps, mean, log_sd)
 
-        if reconstruct:
-            input = eps
+            input = torch.cat([output, z_new], 1)
         else:
-            zero = torch.zeros_like(input)
-            # zero = F.pad(zero, [1, 1, 1, 1], value=1)
-            mean, log_sd = self.prior(zero).chunk(2, 1)
-            z = gaussian_sample(eps, mean, log_sd)
-            input = z
-
+            input = output
 
         input = self.actnorm.reverse(input)
-
         # Run flows
         for flow in self.flows[::-1]:
-            input=flow.reverse(input, emb[self.block_number])
+            embb = None
+            if emb != None:
+                embb = emb[self.block_number]
+            input=flow.reverse(input, embb)
         
         # Unsqueeze
         input=self.squeeze.reverse(input)
@@ -174,24 +187,24 @@ class Flow(torch.nn.Module):
         super(Flow,self).__init__()
 
         self.norm=ActNorm(nsq)
-        self.mixer=InvConv(nsq)
+        self.mixer=Invertible1x1Conv(nsq)
         self.coupling=AffineCoupling(nsq,semb,ncha,affine=True)
 
         return
 
     def forward(self,h,emb):
-        logdet=0
-        h,ld=self.norm.forward(h)
-        logdet=logdet+ld
-        h,ld=self.mixer.forward(h)
-        logdet=logdet+ld
-        h,ld=self.coupling.forward(h,emb)
-        logdet=logdet+ld
+        h,logdet=self.norm.forward(h)
+        h,ld2=self.mixer.forward(h)
+        h,ld3=self.coupling.forward(h,emb)
+
+        logdet = logdet + ld2
+        if ld3 is not None:
+            logdet = logdet + ld3
         return h,logdet
 
     def reverse(self,h,emb):
         h=self.coupling.reverse(h,emb)
-        h=self.mixer.reverse(h)
+        h=self.mixer.forward(h, reverse=True)
         h=self.norm.reverse(h)
         return h
 
@@ -219,61 +232,49 @@ class Squeezer(object):
 
 ########################################################################################################################
 
-from scipy import linalg
-import numpy as np
+from torch.autograd import Variable
 
-class InvConv(torch.nn.Module):
+class Invertible1x1Conv(torch.nn.Module):
+    """
+    The layer outputs both the convolution, and the log determinant
+    of its weight matrix.  If reverse=True it does convolution with
+    inverse
+    """
+    def __init__(self, c):
+        super(Invertible1x1Conv, self).__init__()
+        self.conv = torch.nn.Conv1d(c, c, kernel_size=1, stride=1, padding=0,
+                                    bias=False)
 
-    def __init__(self,in_channel):
-        super(InvConv,self).__init__()
+        # Sample a random orthonormal matrix to initialize weights
+        W = torch.linalg.qr(torch.FloatTensor(c, c).normal_())[0]
 
-        weight=np.random.randn(in_channel,in_channel)
-        q,_=linalg.qr(weight)
-        w_p,w_l,w_u=linalg.lu(q.astype(np.float32))
-        w_s=np.diag(w_u)
-        w_u=np.triu(w_u,1)
-        u_mask=np.triu(np.ones_like(w_u),1)
-        l_mask=u_mask.T
+        # Ensure determinant is 1.0 not -1.0
+        if torch.det(W) < 0:
+            W[:,0] = -1*W[:,0]
+        W = W.view(c, c, 1)
+        self.conv.weight.data = W
 
-        self.register_buffer('w_p',torch.from_numpy(w_p))
-        self.register_buffer('u_mask',torch.from_numpy(u_mask))
-        self.register_buffer('l_mask',torch.from_numpy(l_mask))
-        self.register_buffer('l_eye',torch.eye(l_mask.shape[0]))
-        self.register_buffer('s_sign',torch.sign(torch.tensor(w_s)))
-        self.w_l=torch.nn.Parameter(torch.from_numpy(w_l))
-        self.w_s=torch.nn.Parameter(torch.log(1e-7+torch.abs(torch.tensor(w_s))))
-        self.w_u=torch.nn.Parameter(torch.from_numpy(w_u))
+    def forward(self, z, reverse=False):
+        # shape
+        batch_size, group_size, n_of_groups = z.size()
 
-        self.weight=None
-        self.invweight=None
+        W = self.conv.weight.squeeze()
 
-        return
-
-    def calc_weight(self):
-        weight=(
-            self.w_p
-            @ (self.w_l*self.l_mask+self.l_eye)
-            @ (self.w_u*self.u_mask+torch.diag(self.s_sign*(torch.exp(self.w_s))))
-        )
-        return weight
-
-    def forward(self,h):
-        if self.weight is None:
-            weight=self.calc_weight()
+        if reverse:
+            if not hasattr(self, 'W_inverse'):
+                # Reverse computation
+                W_inverse = W.float().inverse()
+                W_inverse = Variable(W_inverse[..., None])
+                if z.type() == 'torch.cuda.HalfTensor':
+                    W_inverse = W_inverse.half()
+                self.W_inverse = W_inverse
+            z = F.conv1d(z, self.W_inverse, bias=None, stride=1, padding=0)
+            return z
         else:
-            weight=self.weight
-        h=torch.nn.functional.conv1d(h,weight.unsqueeze(2))
-        logdet=self.w_s.sum()*h.size(2)
-        return h,logdet
-
-    def reverse(self,h):
-        if self.invweight is None:
-            invweight=self.calc_weight().inverse()
-        else:
-            invweight=self.invweight
-        h=torch.nn.functional.conv1d(h,invweight.unsqueeze(2))
-        return h
-
+            # Forward computation
+            log_det_W = batch_size * n_of_groups * torch.logdet(W)
+            z = self.conv(z)
+            return z, log_det_W
 ########################################################################################################################
 
 logabs = lambda x: torch.log(torch.abs(x))
@@ -285,179 +286,135 @@ class ActNorm(torch.nn.Module):
         self.loc = torch.nn.Parameter(torch.zeros(1, in_channel, 1))
         self.scale = torch.nn.Parameter(torch.ones(1, in_channel, 1))
 
-        # self.register_buffer("initialized", torch.tensor(0, dtype=torch.uint8))
+        # self.initialized = pretrained
         self.logdet = logdet
 
-    # def initialize(self, input):
+    # def initialize(self, x):
     #     with torch.no_grad():
-    #         flatten = input.permute(1, 0, 2, 3).contiguous().view(input.shape[1], -1)
+    #         flatten = x.permute(1, 0, 2).contiguous().view(x.shape[1], -1)
     #         mean = (
     #             flatten.mean(1)
     #             .unsqueeze(1)
     #             .unsqueeze(2)
-    #             .unsqueeze(3)
-    #             .permute(1, 0, 2, 3)
+    #             .permute(1, 0, 2)
     #         )
     #         std = (
     #             flatten.std(1)
     #             .unsqueeze(1)
     #             .unsqueeze(2)
-    #             .unsqueeze(3)
-    #             .permute(1, 0, 2, 3)
+    #             .permute(1, 0, 2)
     #         )
 
     #         self.loc.data.copy_(-mean)
     #         self.scale.data.copy_(1 / (std + 1e-6))
 
-    def forward(self, input):
-        _, _, width = input.shape
+    def forward(self, x):
+        B, _, T = x.size()
 
-        # if self.initialized.item() == 0:
-        #     self.initialize(input)
-        #     self.initialized.fill_(1)
+        # if not self.initialized:
+        #     self.initialize(x)
+        #     self.initialized = True
 
         log_abs = logabs(self.scale)
 
-        logdet = width * torch.sum(log_abs)
+        logdet = torch.sum(log_abs) * B * T
 
         if self.logdet:
-            return self.scale * (input + self.loc), logdet
+            return self.scale * (x + self.loc), logdet
 
         else:
-            return self.scale * (input + self.loc)
+            return self.scale * (x + self.loc)
 
     def reverse(self, output):
         return output / self.scale - self.loc
 
 ########################################################################################################################
 
+class ZeroConv1d(torch.nn.Module):
+    def __init__(self, in_channel, out_channel, padding=0):
+        super().__init__()
+
+        self.conv = torch.nn.Conv1d(in_channel, out_channel, 3, padding=padding)
+        self.conv.weight.data.zero_()
+        self.conv.bias.data.zero_()
+        self.scale = torch.nn.Parameter(torch.zeros(1, out_channel, 1))
+
+    def forward(self, x):
+        out = self.conv(x)
+        out = out * torch.exp(self.scale * 3)
+        return out
+
 class AffineCoupling(torch.nn.Module):
     def __init__(self, in_channel, semb, filter_size=256, affine=True):
         super().__init__()
 
         self.affine = affine
+        self.net=CouplingNet(in_channel // 2, in_channel if affine else in_channel // 2, filter_size, semb)
 
-        self.net = torch.nn.Sequential(
-            # torch.nn.Conv1d(in_channel // 2, filter_size, 3, padding=1),
-            torch.nn.Conv1d(in_channel // 2 + semb, filter_size, 3, padding=1),
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Conv1d(filter_size, filter_size, 1),
-            torch.nn.ReLU(inplace=True),
-            torch.nn.Conv1d(filter_size, in_channel if self.affine else in_channel // 2, 3, padding=1),
-        )
-
-        self.net[0].weight.data.normal_(0, 0.05)
-        self.net[0].bias.data.zero_()
-
-        self.net[2].weight.data.normal_(0, 0.05)
-        self.net[2].bias.data.zero_()
-
-        self.net[-1].weight.data.zero_()
-        self.net[-1].bias.data.zero_()
-
-    def forward(self, input, emb):
-        in_a, in_b = input.chunk(2, 1)
+    def forward(self, x, emb=None):
+        in_a, in_b = x.chunk(2, 1)
 
         if self.affine:
-            # log_s, t = self.net(in_a).chunk(2, 1)
-            log_s, t = self.net(torch.cat([in_a, emb], dim=1)).chunk(2, 1)
-            # s = torch.exp(log_s)
-            s = torch.sigmoid(log_s + 2)+1e-7
-            # out_a = s * in_a + t
-            out_b = (in_b + t) * s
+            log_s, t = self.net(in_a, emb).chunk(2, 1)
 
-            logdet = torch.sum(torch.log(s).view(input.shape[0], -1), 1)
-
+            out_b = (in_b - t) * torch.exp(-log_s)
+            logdet = torch.sum(-log_s)
         else:
-            net_out = self.net(in_a)
+            net_out = self.net(in_a, emb)
             out_b = in_b + net_out
             logdet = None
-
         return torch.cat([in_a, out_b], 1), logdet
 
-    def reverse(self, output, emb):
+    def reverse(self, output, emb=None):
         out_a, out_b = output.chunk(2, 1)
 
         if self.affine:
-            # log_s, t = self.net(out_a).chunk(2, 1)
-            log_s, t = self.net(torch.cat([out_a, emb], dim=1)).chunk(2, 1)
-            # s = torch.exp(log_s)
-            s = torch.sigmoid(log_s + 2)+1e-7
-            # in_a = (out_a - t) / s
-            in_b = out_b / s - t
-
+            log_s, t = self.net(out_a, emb).chunk(2, 1)
+            in_b = out_b * torch.exp(log_s) + t
         else:
-            net_out = self.net(out_a)
+            net_out = self.net(out_a, emb)
             in_b = out_b - net_out
 
         return torch.cat([out_a, in_b], 1)
 
-# class AffineCoupling(torch.nn.Module):
+class CouplingNet(torch.nn.Module):
 
-#     def __init__(self,nsq,ncha,semb):
-#         super(AffineCoupling,self).__init__()
-#         self.net=CouplingNet(nsq//2,ncha,semb)
-#         return
+    def __init__(self, in_channel, out_channel, filter_size=256, semb=None):
+        super(CouplingNet,self).__init__()
+        self.in_conv = torch.nn.Conv1d(in_channels=in_channel,
+                                        out_channels=filter_size,
+                                        kernel_size=3, padding=1)
+        if semb != None:
+            self.in_cond_conv = torch.nn.Conv1d(in_channels=semb,
+                                            out_channels=in_channel,
+                                            kernel_size=3, padding=1)
 
-#     def forward(self,h):
-#         h1,h2=torch.chunk(h,2,dim=1)
-#         s,m=self.net.forward(h1)
-#         h2=s*(h2+m)
-#         h=torch.cat([h1,h2],1)
-#         logdet=s.log().sum(2).sum(1)
-#         return h,logdet
+        self.mid_conv = torch.nn.Conv1d(in_channels=filter_size,
+                               out_channels=filter_size,
+                               kernel_size=1)
+        if semb != None:
+            self.mid_cond_conv = torch.nn.Conv1d(in_channels=semb,
+                                    out_channels=filter_size,
+                                    kernel_size=1)
 
-#     def reverse(self,h,emb):
-#         h1,h2=torch.chunk(h,2,dim=1)
-#         s,m=self.net.forward(h1,emb)
-#         h2=h2/s-m
-#         h=torch.cat([h1,h2],1)
-#         return h
+        self.out_conv = ZeroConv1d(in_channel=filter_size,
+                                    out_channel=out_channel, padding=1)
 
+    def forward(self, h, emb=None):
+        embb = 0
+        if emb != None:
+            embb = self.in_cond_conv(emb)
+        h = self.in_conv(h + embb)
+        h = F.relu(h, inplace=True)
 
-# class CouplingNet(torch.nn.Module):
-
-#     def __init__(self,nsq,ncha,semb,kw=3):
-#         super(CouplingNet,self).__init__()
-#         assert kw%2==1
-#         # assert ncha%nsq==0
-#         self.ncha=ncha
-#         self.kw=kw
-#         # self.adapt_w=torch.nn.Linear(semb,ncha*kw)
-#         # self.adapt_b=torch.nn.Linear(semb,ncha)
-#         self.net=torch.nn.Sequential(
-#             torch.nn.Conv1d(nsq,ncha,3),
-#             torch.nn.ReLU(inplace=True),
-#             torch.nn.Conv1d(ncha,ncha,1),
-#             torch.nn.ReLU(inplace=True),
-#             torch.nn.Conv1d(ncha,2*nsq,kw,padding=kw//2),
-#         )
-#         self.net[-1].weight.data.zero_()
-#         self.net[-1].bias.data.zero_()
-#         return
-
-#     def forward(self,h):
-#         sbatch,nsq,lchunk=h.size()
-#         h=h.contiguous()
-#         """
-#         # Slower version
-#         ws=list(self.adapt_w(emb).view(sbatch,self.ncha,1,self.kw))
-#         bs=list(self.adapt_b(emb))
-#         hs=list(torch.chunk(h,sbatch,dim=0))
-#         out=[]
-#         for hi,wi,bi in zip(hs,ws,bs):
-#             out.append(torch.nn.functional.conv1d(hi,wi,bias=bi,padding=self.kw//2,groups=nsq))
-#         h=torch.cat(out,dim=0)
-#         """
-#         # Faster version fully using group convolution
-#         # w=self.adapt_w(emb).view(-1,1,self.kw)
-#         # b=self.adapt_b(emb).view(-1)
-#         # h=torch.nn.functional.conv1d(h.view(1,-1,lchunk),w,bias=b,padding=self.kw//2,groups=sbatch*nsq).view(sbatch,self.ncha,lchunk)
-#         #"""
-#         h=self.net.forward(h)
-#         s,m=torch.chunk(h,2,dim=1)
-#         s=torch.sigmoid(s+2)+1e-7
-#         return s,m
+        embb = 0
+        if emb != None:
+            embb = self.mid_cond_conv(emb)
+        h = self.mid_conv(h + embb)
+        h = F.relu(h, inplace=True)
+        
+        h = self.out_conv(h)
+        return h
 
 ########################################################################################################################
 ########################################################################################################################

@@ -186,7 +186,7 @@ def collate_tts(batch, r):
     chars = [pad1d(x[0], max_x_len) for x in batch]
     chars = np.stack(chars)
 
-    wav_split_r = [torch.from_numpy(x[1]).unfold(0, hp.tts_K(r), hp.tts_K(r)).T for x in batch]
+    wav_split_r = [torch.from_numpy(pre_emphasis(x[1]).astype("float32")).unfold(0, hp.tts_K(r), hp.tts_K(r)).T for x in batch]
 
     spec_lens = [x.shape[-1] for x in wav_split_r]
     max_spec_len = max(spec_lens) + 1

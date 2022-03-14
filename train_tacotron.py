@@ -156,7 +156,7 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                   logplists, logdetlosts, attention, stop_outputs = model(x, wav)
 
               nll = -logplists - logdetlosts
-              nll = nll / (wav.shape[2] / model.r) / wav.shape[1]
+            #   nll = nll / (wav.shape[2] / model.r) / wav.shape[1]
               nll = nll.mean()
               stop_loss = F.binary_cross_entropy_with_logits(stop_outputs, stop_targets)
 
@@ -178,7 +178,6 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
             speed = duration / i
 
             step = model.get_step()
-            # k = step // 1000
 
             if step % hp.tts_checkpoint_every == 0 or step == 1:
                 with torch.no_grad():
@@ -194,19 +193,19 @@ def tts_train_loop(paths: Paths, model: Tacotron, scaler, logger, optimizer, tra
                         logplists_, logdetlosts_, attention_, stop_outputs_ = model(x_eval, wav_eval)
 
                         nll_ = -logplists_ - logdetlosts_
-                        nll_ = nll_ / (wav_eval.shape[2] / model.r) / wav_eval.shape[1]
+                        # nll_ = nll_ / (wav_eval.shape[2] / model.r) / wav_eval.shape[1]
                         nll_ = nll_.mean()
                         stop_loss_ = F.binary_cross_entropy_with_logits(stop_outputs_, stop_targets_eval)
 
                         loss_ = nll_ + stop_loss_
 
-                        wav_outputs_, _ = model.generate(x_eval[0])
+                        wav_outputs_, _ = model.generate(x_eval[0], 1)
                         val_mel = melspectrogram(wav_outputs_)
                         break # validate for first 8 batchs 
 
-                    # zlast, _, _, zlist = model.decoder.flows(wav[0, :, 0].view(1, 10//2, 96*2), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
-                    # abc = model.decoder.flows.reverse([zlist[-1]], model.decoder.step_zero_embbeding_features[0].unsqueeze(0), reconstruct=True)
-                    # print("Reverse flow wave and Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
+                    out, _, _, z_list = model.decoder.flows(wav_eval[0, :, 0].view(1, 10, 96), model.decoder.step_zero_embbeding_features[0].unsqueeze(0))
+                    abc = model.decoder.flows.reverse(out, model.decoder.step_zero_embbeding_features[0].unsqueeze(0), z_list=z_list)
+                    print("Reverse flow wave vs Groundtruth diff: ", (wav[0, :, 0] - abc[0]).mean())
 
                     logger.log_validation(loss_.item(), stop_targets_eval, [stop_outputs_, attention_, val_mel], step)
 

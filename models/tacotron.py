@@ -1,5 +1,4 @@
 import os
-from turtle import forward
 import numpy as np
 import torch
 import torch.nn as nn
@@ -9,7 +8,7 @@ from typing import Union
 
 from flow.blow import Model as Blow
 from utils import hparams as hp
-import matplotlib.pyplot as plt
+# import matplotlib.pyplot as plt
 from positional_encodings import PositionalEncoding1D
 from utils.dsp import de_emphasis
 
@@ -224,7 +223,8 @@ class Decoder(nn.Module):
         self.attn_net = LSA(decoder_dims)
         self.attn_rnn = nn.LSTMCell(decoder_dims + decoder_dims // 2, decoder_dims)
 
-        self.rnn_input = nn.Linear(2 * decoder_dims + decoder_K, lstm_dims)
+        self.attn_proj = nn.Linear(2 * decoder_dims, decoder_dims)
+        self.rnn_input = nn.Linear(decoder_dims + decoder_K, lstm_dims)
 
         self.res_rnn1 = nn.LSTMCell(lstm_dims, lstm_dims)
         self.res_rnn2 = nn.LSTMCell(lstm_dims, lstm_dims)
@@ -234,7 +234,7 @@ class Decoder(nn.Module):
         self.stop_proj = nn.Linear(lstm_dims, 1)
 
         # Generative Flows
-        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, semb=lstm_dims*2)
+        self.flows = Blow(2, hp.tts_M, hp.tts_N, ncha=256, semb=lstm_dims*2, block_per_split=3)
 
     def zoneout(self, prev, current, p=0.1):
         device = next(self.parameters()).device  # Use same device as parameters
@@ -242,7 +242,7 @@ class Decoder(nn.Module):
         return prev * mask + current * (1 - mask)
 
     def forward(self, encoder_seq, encoder_seq_proj, prenet_in, yt,
-                hidden_states, cell_states, context_vec, t):
+                hidden_states, cell_states, context_vec, t, temp=1.):
 
         # Need this for reshaping mels
         batch_size = encoder_seq.size(0)
@@ -267,6 +267,7 @@ class Decoder(nn.Module):
 
         # Concat Attention RNN output w. Context Vector & project
         x = torch.cat([context_vec, attn_hidden], dim=1)
+        x = self.attn_proj(x)
 
         # concat output from attention with ground truth for skip conection
         x = torch.cat([x, prenet_in], dim=1)
@@ -306,7 +307,7 @@ class Decoder(nn.Module):
 
         # Output from LSTM are consider as conditioning features
         cond_features = x
-        cond_features_upsample = cond_features.unsqueeze(-1).repeat((1, 1, self.decoder_J))
+        cond_features_upsample = cond_features.unsqueeze(-1).repeat((1, 1, self.decoder_J // 2))
 
         # Postionl encoding generating
         pe = PositionalEncoding1D(self.decoder_J)
@@ -321,28 +322,24 @@ class Decoder(nn.Module):
 
         # forward ground truth to flows when training
         if self.training:
-            flows_input = yt.contiguous().view(batch_size, hp.tts_L // 2, self.decoder_J * 2)
-            z_last, logp, logdet, z_lists = self.flows(flows_input, embbeding_features)
-            if t == 0: self.step_zero_embbeding_features = embbeding_features
-            # z_last, logp, logdet, z_lists = self.flows(flows_input)
+            flows_input = yt.contiguous().view(batch_size, hp.tts_L, self.decoder_J)
+            _, logp, logdet, _ = self.flows(flows_input, embbeding_features)
+            if t == 0: self.step_zero_embbeding_features = embbeding_features # for validation
 
-            # abc= self.flows.reverse(z_lists, embbeding_features, reconstruct=True)
-            # print(yt[0].std(), yt[0].mean(), z_lists[-1][0].std(), z_lists[-1][0].mean())
-            # plt.figure(0)
-            # plt.hist(yt[0].detach().numpy())
-            # plt.figure(1)
-            # plt.plot(yt[0].detach().numpy())
-            # plt.figure(2)
-            # plt.hist(z_lists[-1][0].view(-1).detach().numpy())
+            # print(cond_features_upsample.shape)
             # plt.figure(3)
-            # plt.plot(abc[0].detach().numpy())
+            # import librosa.display
+            # librosa.display.specshow(cond_pe[0].detach().numpy())
+            # plt.figure(4)
+            # librosa.display.specshow(cond_pe[1].detach().numpy())
+            # # plt.plot(abc[0].detach().numpy())
             # plt.show()
             return logp, logdet, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
         else:
             device = next(self.parameters()).device
-            z_new = torch.randn(batch_size, hp.tts_L*16, self.decoder_J//16).to(device) * 0.7
-            generate_wavs = self.flows.reverse([z_new], embbeding_features, reconstruct=True)
+            out = torch.randn(batch_size, hp.tts_L, self.decoder_J).to(device) * temp
+            generate_wavs = self.flows.reverse(out, embbeding_features, z_list=[])
             return generate_wavs, stop_proj, scores, [hidden_states, cell_states, context_vec]
 
 
@@ -440,7 +437,7 @@ class Tacotron(nn.Module):
 
         return logplists, logdetlosts, attn_scores, stop_outputs
 
-    def generate(self, x, steps=2000):
+    def generate(self, x, steps=2000, temp=0.7):
         self.eval()
         device = next(self.parameters()).device  # use same device as parameters
 
@@ -475,14 +472,14 @@ class Tacotron(nn.Module):
         encoder_seq_proj = self.encoder_proj(encoder_seq)
 
         # Need a couple of lists for outputs
-        wav_outputs, attn_scores, stop_outputs = [], [], []
+        wav_outputs, attn_scores = [], []
 
         # Run the decoder loop
         for t in range(0, steps, self.r):
             prenet_in = wav_outputs[-1] if t > 0 else go_frame
             wav_frames, stop_tokens, scores, [hidden_states, cell_states, context_vec] = \
             self.decoder(encoder_seq, encoder_seq_proj, prenet_in, None,
-                         hidden_states, cell_states, context_vec, t)
+                         hidden_states, cell_states, context_vec, t, temp)
             wav_outputs.append(wav_frames)
             attn_scores.append(scores)
             # Stop the loop if silent frames present
@@ -490,11 +487,12 @@ class Tacotron(nn.Module):
 
         # Concat the mel outputs into sequence
         wav_outputs = torch.cat(wav_outputs, dim=1)
-        wav_outputs = wav_outputs[0].cpu().data.numpy()
+        wav_outputs = wav_outputs.detach()[0]
+        wav_outputs = de_emphasis(wav_outputs)
 
         # For easy visualisation
         attn_scores = torch.cat(attn_scores, 1)
-        attn_scores = attn_scores.cpu().data.numpy()[0]
+        attn_scores = attn_scores.detach()[0]
 
         self.train()
 
