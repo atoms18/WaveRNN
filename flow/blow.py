@@ -351,28 +351,38 @@ class AffineCoupling(torch.nn.Module):
         self.affine = affine
         self.net=CouplingNet(in_channel // 2, in_channel if affine else in_channel // 2, filter_size, semb)
 
-    def forward(self, x, emb=None):
-        in_a, in_b = x.chunk(2, 1)
+    def forward(self, input, emb):
+        in_a, in_b = input.chunk(2, 1)
 
         if self.affine:
             log_s, t = self.net(in_a, emb).chunk(2, 1)
+            # s = torch.exp(log_s)
+            s = torch.sigmoid(log_s + 2)+1e-7
+            # out_a = s * in_a + t
+            out_b = (in_b + t) * s
 
-            out_b = (in_b - t) * torch.exp(-log_s)
-            logdet = torch.sum(-log_s)
+            logdet = torch.sum(torch.log(s).view(input.shape[0], -1), 1)
+
         else:
-            net_out = self.net(in_a, emb)
+            net_out = self.net(in_a)
             out_b = in_b + net_out
             logdet = None
+
         return torch.cat([in_a, out_b], 1), logdet
 
-    def reverse(self, output, emb=None):
+    def reverse(self, output, emb):
         out_a, out_b = output.chunk(2, 1)
 
         if self.affine:
+            # log_s, t = self.net(out_a).chunk(2, 1)
             log_s, t = self.net(out_a, emb).chunk(2, 1)
-            in_b = out_b * torch.exp(log_s) + t
+            # s = torch.exp(log_s)
+            s = torch.sigmoid(log_s + 2)+1e-7
+            # in_a = (out_a - t) / s
+            in_b = out_b / s - t
+
         else:
-            net_out = self.net(out_a, emb)
+            net_out = self.net(out_a)
             in_b = out_b - net_out
 
         return torch.cat([out_a, in_b], 1)

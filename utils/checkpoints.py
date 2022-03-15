@@ -71,8 +71,8 @@ def save_checkpoint(checkpoint_type: str, paths: Paths, model, optimizer, *,
 
     if name:
         named_paths = {
-            'w': f'/content/drive/MyDrive/Colab Notebooks/voiceclone/full_wave_tacotron_model/{name}_weights.pyt',
-            'o': f'/content/drive/MyDrive/Colab Notebooks/voiceclone/full_wave_tacotron_model/{name}_optim.pyt',
+            'w': f'/content/drive/MyDrive/Colab Notebooks/VoiceClone/full_wt2_model/{name}_weights.pyt',
+            'o': f'/content/drive/MyDrive/Colab Notebooks/VoiceClone/full_wt2_model/{name}_optim.pyt',
         }
         helper(named_paths, True)
 
