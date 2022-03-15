@@ -426,8 +426,8 @@ class Tacotron(nn.Module):
             stop_outputs.extend([stop_tokens] * self.r)
 
         # Concat the mel outputs into sequence
-        logplists = torch.stack(logplists, 1)
-        logdetlosts = torch.stack(logdetlosts, 1)
+        logplists = torch.stack(logplists)
+        logdetlosts = torch.stack(logdetlosts)
 
         stop_outputs = torch.cat(stop_outputs, 1)
 

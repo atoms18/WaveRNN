@@ -36,7 +36,7 @@ class Model(torch.nn.Module):
         self.squeeze=Squeezer(factor=sqfactor)
 
     def forward(self,h,emb=None):
-        B, _, T = h.size()
+        # B, _, T = h.size()
 
         # Prepare
         averaging_emb = None
@@ -56,8 +56,8 @@ class Model(torch.nn.Module):
                 log_p_sum = log_p_sum + log_p
         log_p_sum += 0.5 * (- log(2.0 * pi) - out.pow(2)).sum()
 
-        log_det = log_det / (B * T)
-        log_p_sum = log_p_sum / (B * T)
+        # log_det = log_det / (B * T)
+        # log_p_sum = log_p_sum / (B * T)
         return out,log_p_sum,log_det,z_list
 
     def reverse(self,z,emb=None,z_list=[]):
@@ -187,7 +187,7 @@ class Flow(torch.nn.Module):
         super(Flow,self).__init__()
 
         self.norm=ActNorm(nsq)
-        self.mixer=Invertible1x1Conv(nsq)
+        self.mixer=InvConv(nsq)
         self.coupling=AffineCoupling(nsq,semb,ncha,affine=True)
 
         return
@@ -204,7 +204,7 @@ class Flow(torch.nn.Module):
 
     def reverse(self,h,emb):
         h=self.coupling.reverse(h,emb)
-        h=self.mixer.forward(h, reverse=True)
+        h=self.mixer.reverse(h)
         h=self.norm.reverse(h)
         return h
 
@@ -232,49 +232,52 @@ class Squeezer(object):
 
 ########################################################################################################################
 
-from torch.autograd import Variable
+from scipy import linalg
+import numpy as np
 
-class Invertible1x1Conv(torch.nn.Module):
-    """
-    The layer outputs both the convolution, and the log determinant
-    of its weight matrix.  If reverse=True it does convolution with
-    inverse
-    """
-    def __init__(self, c):
-        super(Invertible1x1Conv, self).__init__()
-        self.conv = torch.nn.Conv1d(c, c, kernel_size=1, stride=1, padding=0,
-                                    bias=False)
+class InvConv(torch.nn.Module):
 
-        # Sample a random orthonormal matrix to initialize weights
-        W = torch.linalg.qr(torch.FloatTensor(c, c).normal_())[0]
+    def __init__(self,in_channel):
+        super(InvConv,self).__init__()
 
-        # Ensure determinant is 1.0 not -1.0
-        if torch.det(W) < 0:
-            W[:,0] = -1*W[:,0]
-        W = W.view(c, c, 1)
-        self.conv.weight.data = W
+        weight=np.random.randn(in_channel,in_channel)
+        q,_=linalg.qr(weight)
+        w_p,w_l,w_u=linalg.lu(q.astype(np.float32))
+        w_s=np.diag(w_u)
+        w_u=np.triu(w_u,1)
+        u_mask=np.triu(np.ones_like(w_u),1)
+        l_mask=u_mask.T
 
-    def forward(self, z, reverse=False):
-        # shape
-        batch_size, group_size, n_of_groups = z.size()
+        self.register_buffer('w_p',torch.from_numpy(w_p))
+        self.register_buffer('u_mask',torch.from_numpy(u_mask))
+        self.register_buffer('l_mask',torch.from_numpy(l_mask))
+        self.register_buffer('l_eye',torch.eye(l_mask.shape[0]))
+        self.register_buffer('s_sign',torch.sign(torch.tensor(w_s)))
+        self.w_l=torch.nn.Parameter(torch.from_numpy(w_l))
+        self.w_s=torch.nn.Parameter(torch.log(1e-7+torch.abs(torch.tensor(w_s))))
+        self.w_u=torch.nn.Parameter(torch.from_numpy(w_u))
 
-        W = self.conv.weight.squeeze()
+    def calc_weight(self):
+        weight=(
+            self.w_p
+            @ (self.w_l*self.l_mask+self.l_eye)
+            @ (self.w_u*self.u_mask+torch.diag(self.s_sign*(torch.exp(self.w_s))))
+        )
+        return weight
 
-        if reverse:
-            if not hasattr(self, 'W_inverse'):
-                # Reverse computation
-                W_inverse = W.float().inverse()
-                W_inverse = Variable(W_inverse[..., None])
-                if z.type() == 'torch.cuda.HalfTensor':
-                    W_inverse = W_inverse.half()
-                self.W_inverse = W_inverse
-            z = F.conv1d(z, self.W_inverse, bias=None, stride=1, padding=0)
-            return z
-        else:
-            # Forward computation
-            log_det_W = batch_size * n_of_groups * torch.logdet(W)
-            z = self.conv(z)
-            return z, log_det_W
+    def forward(self,h):
+        weight=self.calc_weight()
+
+        h=torch.nn.functional.conv1d(h,weight.unsqueeze(2))
+        logdet=self.w_s.sum()*h.size(2)
+        return h,logdet
+
+    def reverse(self,h):
+        invweight=self.calc_weight().inverse()
+
+        h=torch.nn.functional.conv1d(h,invweight.unsqueeze(2))
+        return h
+
 ########################################################################################################################
 
 logabs = lambda x: torch.log(torch.abs(x))
@@ -317,7 +320,7 @@ class ActNorm(torch.nn.Module):
 
         log_abs = logabs(self.scale)
 
-        logdet = torch.sum(log_abs) * B * T
+        logdet = torch.sum(log_abs) * T
 
         if self.logdet:
             return self.scale * (x + self.loc), logdet
@@ -361,7 +364,7 @@ class AffineCoupling(torch.nn.Module):
             # out_a = s * in_a + t
             out_b = (in_b + t) * s
 
-            logdet = torch.sum(torch.log(s).view(input.shape[0], -1), 1)
+            logdet = torch.sum(torch.log(s))
 
         else:
             net_out = self.net(in_a)
@@ -374,7 +377,6 @@ class AffineCoupling(torch.nn.Module):
         out_a, out_b = output.chunk(2, 1)
 
         if self.affine:
-            # log_s, t = self.net(out_a).chunk(2, 1)
             log_s, t = self.net(out_a, emb).chunk(2, 1)
             # s = torch.exp(log_s)
             s = torch.sigmoid(log_s + 2)+1e-7
