@@ -11,10 +11,10 @@ import time
 
 def gen_testset(model: WaveRNN, test_set, samples, batched, target, overlap, save_path: Path):
 
-    s = time.perf_counter()
     k = model.get_step() // 1000
 
     for i, (m, x) in enumerate(test_set, 1):
+        s = time.perf_counter()
 
         if i > samples: break
 
@@ -36,8 +36,8 @@ def gen_testset(model: WaveRNN, test_set, samples, batched, target, overlap, sav
 
         _ = model.generate(m, save_str, batched, target, overlap, hp.mu_law)
     
-    e = time.perf_counter()
-    print(e - s, " sec")
+        e = time.perf_counter()
+        print(e - s, " sec")
 
 
 def gen_from_file(model: WaveRNN, load_path: Path, save_path: Path, batched, target, overlap):
