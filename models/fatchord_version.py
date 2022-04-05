@@ -119,7 +119,7 @@ class WaveRNN(nn.Module):
         self._to_flatten += [self.rnn1, self.rnn2]
 
         # self.fc1 = nn.Linear(rnn_dims + self.aux_dims, fc_dims)
-        self.fc2 = nn.Linear(fc_dims + self.aux_dims, fc_dims)
+        self.fc2 = nn.Linear(rnn_dims + self.aux_dims, fc_dims)
         self.fc3 = nn.Linear(fc_dims, self.n_classes)
 
         self.register_buffer('step', torch.zeros(1, dtype=torch.long))
