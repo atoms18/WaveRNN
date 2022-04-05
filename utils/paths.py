@@ -5,7 +5,8 @@ from pathlib import Path
 class Paths:
     """Manages and configures the paths used by WaveRNN, Tacotron, and the data."""
     def __init__(self, data_path, voc_id, tts_id):
-        self.base = Path(__file__).parent.parent.expanduser().resolve()
+        # self.base = Path(__file__).parent.parent.expanduser().resolve()
+        self.base = Path("/content/drive/MyDrive/Colab Notebooks/voiceclone/proj").expanduser().resolve()
 
         # Data Paths
         self.data = Path(data_path).expanduser().resolve()
